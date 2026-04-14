@@ -13,6 +13,48 @@
 </div>
 
 ---
+## Showcase
+
+<div align="center">
+
+<p><strong>Session flow</strong></p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/readme/01-no-active-session.png" alt="No active session" width="100%"></td>
+    <td width="50%"><img src="assets/readme/02-session-setup-empty.png" alt="Empty session setup" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/readme/03-session-setup-filled.png" alt="Filled session setup" width="100%"></td>
+    <td width="50%"><img src="assets/readme/04-active-session.png" alt="Active session" width="100%"></td>
+  </tr>
+</table>
+
+<p><strong>Settings and controls</strong></p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/readme/05-settings-ai.png" alt="AI settings" width="100%"></td>
+    <td width="50%"><img src="assets/readme/06-settings-xp.png" alt="XP settings" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/readme/07-settings-monitor.png" alt="Monitor settings" width="100%"></td>
+    <td width="50%"><img src="assets/readme/08-settings-personality.png" alt="Personality settings" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/readme/09-personality-dropdown.png" alt="Personality dropdown" width="100%"></td>
+    <td width="50%"><img src="assets/readme/10-mic-dropdown.png" alt="Microphone dropdown" width="100%"></td>
+  </tr>
+</table>
+
+<p><strong>About</strong></p>
+
+<img src="assets/readme/11-about.png" alt="About screen" width="100%">
+
+</div>
+
+---
+
 
 ## What is Code Sergeant?
 
