@@ -1,4 +1,5 @@
 """Text-to-speech service with ElevenLabs support."""
+import inspect
 import logging
 import os
 import queue
@@ -25,6 +26,15 @@ except ImportError as e:
 
 
 # Common ElevenLabs voices for different personalities
+# When ElevenLabs is unavailable, pyttsx3 picks the first ID present on this Mac.
+# Fred is very robotic; compact Samantha/Daniel are usually more listenable.
+_PREFERRED_PYTTSX3_VOICE_IDS = [
+    "com.apple.voice.compact.en-US.Samantha",
+    "com.apple.voice.compact.en-GB.Daniel",
+    "com.apple.voice.compact.en-AU.Karen",
+    "com.apple.speech.synthesis.voice.Fred",
+]
+
 RECOMMENDED_VOICES = {
     "sergeant": {
         "voice_id": "DGzg6RaUqxGRTHSBjfgF",
@@ -58,8 +68,9 @@ class TTSService:
         api_key: Optional[str] = None,
         voice_id: Optional[str] = None,
         model_id: str = "eleven_turbo_v2_5",
-        rate: int = 150,
-        volume: float = 0.8,
+        rate: int = 200,
+        volume: float = 1.0,
+        optimize_for_speed: bool = True,
     ):
         """
         Initialize TTS service.
@@ -78,6 +89,7 @@ class TTSService:
         self.model_id = model_id
         self.rate = rate
         self.volume = volume
+        self.optimize_for_speed = optimize_for_speed  # Store speed optimization flag
         self.speak_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.worker_thread: Optional[threading.Thread] = None
@@ -145,8 +157,7 @@ class TTSService:
             self.engine = pyttsx3.init()
             self.engine.setProperty("rate", self.rate)
             self.engine.setProperty("volume", self.volume)
-            # Set Fred as fallback voice
-            self._set_voice("com.apple.speech.synthesis.voice.Fred")
+            self._set_preferred_pyttsx3_voice()
             logger.debug("pyttsx3 fallback initialized")
         except Exception as e:
             logger.warning(f"Could not initialize pyttsx3 fallback: {e}")
@@ -163,13 +174,28 @@ class TTSService:
             if self.voice_id and self.voice_id.startswith("com.apple"):
                 self._set_voice(self.voice_id)
             else:
-                # Default to Fred for drill sergeant feel
-                self._set_voice("com.apple.speech.synthesis.voice.Fred")
+                self._set_preferred_pyttsx3_voice()
 
             logger.info("pyttsx3 TTS engine initialized")
         except Exception as e:
             logger.error(f"Failed to initialize pyttsx3 engine: {e}")
             self.engine = None
+
+    def _set_preferred_pyttsx3_voice(self) -> None:
+        """Pick the best available built-in macOS voice (avoids robotic Fred when possible)."""
+        if not self.engine:
+            return
+        try:
+            installed = {v.id for v in self.engine.getProperty("voices")}
+        except Exception as e:
+            logger.warning(f"Could not list pyttsx3 voices: {e}")
+            return
+        for vid in _PREFERRED_PYTTSX3_VOICE_IDS:
+            if vid in installed:
+                self.engine.setProperty("voice", vid)
+                logger.info(f"TTS voice set to: {vid}")
+                return
+        logger.warning("No preferred pyttsx3 voice ID matched; using engine default")
 
     def _set_voice(self, voice_id: str) -> bool:
         """
@@ -488,12 +514,47 @@ class TTSService:
             self._current_temp_file = None
 
     def _speak_elevenlabs(self, text: str):
-        """Speak using ElevenLabs API (v2)."""
+        """Speak using ElevenLabs API (v2) optimized for maximum speed."""
         try:
+            # Configure for maximum speed if optimization is enabled
+            if self.optimize_for_speed:
+                # Ultra-fast settings for minimum latency
+                model_id = "eleven_turbo_v2_5"  # Fastest model
+                output_format = "mp3_22050_32"  # Lowest quality, fastest
+                optimize_streaming_latency = 4  # Maximum streaming optimization
+            else:
+                # Default balanced settings
+                model_id = self.model_id
+                output_format = "mp3_44100_128"  # Higher quality
+                optimize_streaming_latency = 2  # Standard streaming
+
+            # ElevenLabs SDK signatures vary across versions. Only pass kwargs
+            # supported by the installed client so we don't fall back to pyttsx3.
+            convert_kwargs = {
+                "text": text,
+                "voice_id": self.voice_id,
+                "model_id": model_id,
+                "output_format": output_format,
+            }
+            try:
+                accepted_kwargs = set(
+                    inspect.signature(self.client.text_to_speech.convert).parameters
+                )
+            except (TypeError, ValueError):
+                accepted_kwargs = set()
+            if (
+                optimize_streaming_latency is not None
+                and (
+                    not accepted_kwargs
+                    or "optimize_streaming_latency" in accepted_kwargs
+                )
+            ):
+                convert_kwargs["optimize_streaming_latency"] = (
+                    optimize_streaming_latency
+                )
+
             # Generate audio using v2 API
-            audio_gen = self.client.text_to_speech.convert(
-                text=text, voice_id=self.voice_id, model_id=self.model_id
-            )
+            audio_gen = self.client.text_to_speech.convert(**convert_kwargs)
 
             # Convert generator to bytes
             audio_bytes = b"".join(audio_gen)
@@ -506,14 +567,25 @@ class TTSService:
             # Track temp file for cleanup
             self._current_temp_file = temp_file
 
-            # Play the audio using Popen (allows interruption)
-            self._current_process = subprocess.Popen(["afplay", temp_file])
+            # Play the audio (afplay: -r is *playback rate* 1.0=normal, not sample rate;
+            # -q requires an explicit quality value and only matters for rate-scaled playback.)
+            afplay_args: list[str] = ["afplay", temp_file]
+            if self.optimize_for_speed:
+                # Slightly faster playback at low quality for lower latency.
+                afplay_args = ["afplay", "-r", "1.12", "-q", "0", temp_file]
+            
+            self._current_process = subprocess.Popen(afplay_args)
             self._current_process.wait()  # Block until done or terminated
+
+            if self._current_process.returncode not in (0, None):
+                raise RuntimeError(
+                    f"afplay exited with code {self._current_process.returncode}"
+                )
 
             # Clean up temp file
             self._cleanup_temp_file()
 
-            logger.debug(f"Spoke (ElevenLabs): {text[:50]}")
+            logger.debug(f"Spoke (ElevenLabs {'ultra-fast' if self.optimize_for_speed else 'optimized'}): {text[:50]}")
         except Exception as e:
             logger.error(f"Error speaking with ElevenLabs: {e}")
             self._current_process = None

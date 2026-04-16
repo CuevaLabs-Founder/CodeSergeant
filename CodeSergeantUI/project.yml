@@ -45,6 +45,7 @@ targets:
         NSHumanReadableCopyright: "Copyright © 2026 Code Sergeant"
         NSPrincipalClass: NSApplication
         NSHighResolutionCapable: YES
+        NSMicrophoneUsageDescription: "Code Sergeant uses your microphone for wake word detection, push-to-talk, and voice notes."
         LSUIElement: YES
 
 schemes:
@@ -56,4 +57,3 @@ schemes:
       config: Debug
     archive:
       config: Release
-

@@ -2,423 +2,537 @@
 //  DashboardView.swift
 //  CodeSergeantUI
 //
-//  Main dashboard with liquid glass design, XP system, and warning strobe
+//  Main dashboard with a compact horizontal session layout for the menu bar app.
 //
 
 import SwiftUI
-import AppKit
 
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
-    
-    @State private var goalText: String = ""
-    @State private var showingSettings = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var goalText = ""
     @State private var animateIn = false
-    
+    @State private var showingEndSessionConfirmation = false
+
     var body: some View {
         ZStack {
-            // Background
-            GlassBackground(opacity: 0.6)
-            
-            // Content
-            VStack(spacing: 0) {
-                // Header
-                headerView
-                    .offset(y: animateIn ? 0 : -50)
-                    .opacity(animateIn ? 1 : 0)
-                
-                Spacer()
-                
-                // Main content
-                if appState.isSessionActive {
-                    activeSessionView
-                        .transition(.asymmetric(
-                            insertion: .scale(scale: 0.8).combined(with: .opacity),
-                            removal: .scale(scale: 1.1).combined(with: .opacity)
-                        ))
-                } else {
-                    startSessionView
-                        .transition(.asymmetric(
-                            insertion: .scale(scale: 0.9).combined(with: .opacity),
-                            removal: .scale(scale: 0.8).combined(with: .opacity)
-                        ))
+            VStack(spacing: layoutSpacing) {
+                DashboardHeader(
+                    isSessionActive: appState.isSessionActive,
+                    isCompact: appState.isSessionActive,
+                    showHome: appState.showHome,
+                    showSettings: appState.showSettings
+                )
+                .offset(y: animateIn ? 0 : -16)
+                .opacity(animateIn ? 1 : 0)
+
+                Group {
+                    if appState.isSessionActive {
+                        ActiveSessionPanel(
+                            goal: appState.sessionGoal,
+                            remainingSeconds: appState.remainingSeconds,
+                            totalSeconds: max(Int(appState.workMinutes) * 60, appState.remainingSeconds),
+                            isBreak: appState.isBreak,
+                            totalXP: appState.totalXP,
+                            sessionXP: appState.sessionXP,
+                            currentRank: appState.currentRank,
+                            rankProgress: appState.rankProgress,
+                            nextRankName: appState.nextRankName,
+                            xpToNextRank: appState.xpToNextRank,
+                            focusTimeMinutes: appState.focusTimeMinutes,
+                            isPaused: appState.isPaused,
+                            pauseAction: pauseOrResume,
+                            endAction: { showingEndSessionConfirmation = true },
+                            skipAction: appState.isBreak ? { appState.skipBreak() } : nil
+                        )
+                    } else {
+                        StartSessionPanel(
+                            goalText: $goalText,
+                            workMinutes: $appState.workMinutes,
+                            breakMinutes: $appState.breakMinutes,
+                            isStartingSession: appState.isStartingSession,
+                            errorMessage: appState.sessionErrorMessage,
+                            startAction: startSession
+                        )
+                    }
                 }
-                
-                Spacer()
-                
-                // Footer status
-                footerView
-                    .offset(y: animateIn ? 0 : 50)
-                    .opacity(animateIn ? 1 : 0)
+                .transition(contentTransition)
+
+                DashboardFooter(
+                    backendName: backendName,
+                    screenMonitoringEnabled: appState.screenMonitoringEnabled,
+                    lastJudgmentText: appState.lastJudgmentText,
+                    warningStatus: appState.warningStatus,
+                    isCompact: appState.isSessionActive
+                )
+                .offset(y: animateIn ? 0 : 16)
+                .opacity(animateIn ? 1 : 0)
             }
-            .padding(30)
+            .disabled(showingEndSessionConfirmation)
+            .blur(radius: showingEndSessionConfirmation ? 2 : 0)
+
+            if showingEndSessionConfirmation {
+                InlineConfirmationOverlay(
+                    title: "Quit session early?",
+                    message: "Ending now applies your configured early-exit XP penalty.",
+                    confirmTitle: "Quit Session",
+                    confirmStyle: .danger,
+                    onConfirm: {
+                        showingEndSessionConfirmation = false
+                        appState.endSession(early: true)
+                    },
+                    onCancel: {
+                        showingEndSessionConfirmation = false
+                    }
+                )
+                .transition(.opacity)
+            }
         }
-        .frame(width: 520, height: 680)
-        .warningStrobe(status: appState.warningStatus)  // Apply strobe border
+        .padding(layoutPadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.8).delay(0.1)) {
+            goalText = appState.sessionGoal
+            if reduceMotion {
                 animateIn = true
+            } else {
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) {
+                    animateIn = true
+                }
             }
         }
     }
-    
-    // MARK: - Header
-    
-    private var headerView: some View {
-        HStack {
-            // App icon and title
-            HStack(spacing: 12) {
-                Image(systemName: "shield.lefthalf.filled")
-                    .font(.system(size: 28))
+
+    private var layoutSpacing: CGFloat {
+        appState.isSessionActive ? 10 : AppTheme.sectionSpacing
+    }
+
+    private var layoutPadding: CGFloat {
+        appState.isSessionActive ? AppTheme.chromePadding : AppTheme.windowPadding
+    }
+
+    private var contentTransition: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98))
+    }
+
+    private var backendName: String {
+        switch appState.primaryBackend {
+        case "openai":
+            return "OpenAI"
+        case "ollama":
+            return "Ollama"
+        default:
+            return "No AI"
+        }
+    }
+
+    private func startSession() {
+        appState.sessionGoal = goalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.startSession()
+    }
+
+    private func pauseOrResume() {
+        if appState.isPaused {
+            appState.resumeSession()
+        } else {
+            appState.pauseSession()
+        }
+    }
+}
+
+private struct DashboardHeader: View {
+    let isSessionActive: Bool
+    let isCompact: Bool
+    let showHome: () -> Void
+    let showSettings: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: isCompact ? 10 : 16) {
+            LiquidIconButton("Home", icon: "chevron.left", size: isCompact ? 38 : AppTheme.controlMinHeight) {
+                showHome()
+            }
+
+            VStack(alignment: .leading, spacing: isCompact ? 2 : 4) {
+                Label("Code Sergeant", systemImage: "shield.lefthalf.filled")
+                    .font((isCompact ? Font.headline : .title2).weight(.black))
                     .foregroundStyle(
                         LinearGradient(
-                            colors: militaryGradient,
+                            colors: [AppTheme.canvasAccent, AppTheme.primaryTint],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("CODE SERGEANT")
-                        .font(.system(size: 22, weight: .black, design: .monospaced))
-                        .tracking(1)
-                        .foregroundStyle(.primary)
-                    
-                    Text(appState.isSessionActive ? "Session Active" : "Ready to Focus")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            
-            Spacer()
-            
-            // Settings button - FIXED
-            LiquidIconButton("gear", size: 40) {
-                if #available(macOS 14.0, *) {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                } else {
-                    NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-                }
-            }
-        }
-        .padding(.bottom, 10)
-    }
-    
-    // MARK: - Start Session View
-    
-    private var startSessionView: some View {
-        VStack(spacing: 24) {
-            // Goal input card
-            HoverGlassCard(cornerRadius: 24) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Label("MISSION", systemImage: "target")
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .tracking(1)
-                    
-                    TextField("What do you want to accomplish?", text: $goalText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 16))
-                        .padding(14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(.white.opacity(0.08))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(.white.opacity(0.1), lineWidth: 1)
-                        )
-                }
-                .padding(20)
-            }
-            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: goalText)
-            
-            // Timer settings card
-            HoverGlassCard(cornerRadius: 24) {
-                VStack(spacing: 20) {
-                    Label("SESSION SETTINGS", systemImage: "timer")
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .tracking(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    
-                    TimerSlider(
-                        label: "Work Duration",
-                        value: $appState.workMinutes,
-                        range: 15...60,
-                        step: 5,
-                        unit: "min"
-                    )
-                    
-                    Divider()
-                        .background(.white.opacity(0.1))
-                    
-                    TimerSlider(
-                        label: "Break Duration",
-                        value: $appState.breakMinutes,
-                        range: 5...15,
-                        step: 5,
-                        unit: "min"
-                    )
-                }
-                .padding(20)
-            }
-            
-            // Start button
-            LiquidButton("Start Focus Session", icon: "play.fill", style: .primary) {
-                appState.sessionGoal = goalText
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                    appState.startSession()
-                }
-            }
-            .disabled(goalText.trimmingCharacters(in: .whitespaces).isEmpty)
-            .opacity(goalText.trimmingCharacters(in: .whitespaces).isEmpty ? 0.6 : 1)
-            .animation(.easeInOut(duration: 0.2), value: goalText.isEmpty)
-        }
-        .padding(.horizontal, 10)
-    }
-    
-    // MARK: - Active Session View
-    
-    private var activeSessionView: some View {
-        VStack(spacing: 24) {
-            // Timer with XP display below
-            VStack(spacing: 16) {
-                TimerDisplay(
-                    remainingSeconds: appState.remainingSeconds,
-                    totalSeconds: Int(appState.workMinutes) * 60,
-                    isBreak: appState.isBreak
-                )
-                
-                // XP earned this session with animation - DOPAMINE REWARD!
-                HStack(spacing: 12) {
-                    Image(systemName: "star.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.yellow)
-                    
-                    Text("+\(appState.sessionXP) XP")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(.yellow)
-                        .contentTransition(.numericText())
-                        .animation(.spring(response: 0.3), value: appState.sessionXP)
-                    
-                    Text("this session")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            
-            // Current goal
-            HoverGlassCard(cornerRadius: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("MISSION", systemImage: "target")
-                        .font(.system(size: 12, weight: .black, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .tracking(1)
-                    
-                    Text(appState.sessionGoal.isEmpty ? "No goal set" : appState.sessionGoal)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-            }
-            
-            // Stats row - REPLACED "Focus Status" with Rank Display
-            HStack(spacing: 16) {
-                StatCard(
-                    label: "Focus Time",
-                    value: "\(appState.focusTimeMinutes)",
-                    unit: "min",
-                    icon: "clock.fill",
-                    color: .blue
-                )
-                
-                // Rank display instead of redundant focus status
-                StatCard(
-                    label: "Rank",
-                    value: String(appState.currentRank.prefix(3)).uppercased(),
-                    unit: "",
-                    icon: "star.fill",
-                    color: rankColor
-                )
-            }
-            
-            // Control buttons - FIXED pause/resume toggle
-            HStack(spacing: 12) {
-                // Pause/Resume button with proper state tracking - FIXED
-                LiquidIconButton(
-                    appState.isPaused ? "play.fill" : "pause.fill",
-                    size: 44
-                ) {
-                    if appState.isPaused {
-                        appState.resumeSession()
-                    } else {
-                        appState.pauseSession()
-                    }
-                }
-                
-                LiquidButton("End Session", icon: "stop.fill", style: .danger) {
-                    showEndSessionConfirmation()
-                }
-                
-                if appState.isBreak {
-                    LiquidIconButton("forward.fill", size: 44) {
-                        appState.skipBreak()
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 10)
-    }
-    
-    // MARK: - Footer
-    
-    private var footerView: some View {
-        HStack(spacing: 12) {
-            // AI status indicator
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(appState.openAIAvailable || appState.ollamaAvailable ? Color.green : Color.orange)
-                    .frame(width: 8, height: 8)
-                
-                Text(appState.primaryBackend == "openai" ? "OpenAI" : (appState.ollamaAvailable ? "Ollama" : "No AI"))
-                    .font(.system(size: 11, weight: .medium))
+
+                Text(isSessionActive ? "Session active" : "Ready to start")
+                    .font(isCompact ? .caption : .subheadline)
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .glassCard(cornerRadius: 12, backgroundOpacity: 0.2)
-            
+
             Spacer()
-            
-            // Screen monitoring status
-            if appState.screenMonitoringEnabled {
-                HStack(spacing: 6) {
-                    Image(systemName: "eye.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                    
-                    Text("Screen Monitoring")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .glassCard(cornerRadius: 12, backgroundOpacity: 0.2)
+
+            LiquidIconButton("Settings", icon: "gearshape.fill", size: isCompact ? 38 : AppTheme.controlMinHeight) {
+                showSettings()
             }
         }
-        .padding(.top, 10)
-    }
-    
-    // MARK: - Helpers
-    
-    private var militaryGradient: [Color] {
-        [Color(red: 0.3, green: 0.5, blue: 0.2), Color(red: 0.2, green: 0.3, blue: 0.5)]  // Olive green + navy blue
-    }
-    
-    private var rankColor: Color {
-        switch appState.currentRank.lowercased() {
-        case "recruit":
-            return .gray
-        case "private":
-            return Color(red: 0.3, green: 0.5, blue: 0.8)  // Navy blue
-        case "corporal":
-            return Color(red: 0.3, green: 0.6, blue: 0.3)  // Olive green
-        case "sergeant":
-            return Color(red: 0.6, green: 0.3, blue: 0.8)  // Purple
-        case "staff sergeant":
-            return Color(red: 0.8, green: 0.6, blue: 0.2)  // Gold
-        case "captain":
-            return Color(red: 0.9, green: 0.4, blue: 0.2)  // Orange
-        default:
-            return .white
-        }
-    }
-    
-    private func showEndSessionConfirmation() {
-        let penalty = Int(Double(appState.sessionXP) * 0.5)  // 50% penalty
-        
-        let alert = NSAlert()
-        alert.messageText = "End Session Early?"
-        alert.informativeText = "You'll lose \(penalty) XP (50% penalty).\n\nContinue?"
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "End Session")
-        alert.addButton(withTitle: "Keep Going")
-        
-        let response = alert.runModal()
-        
-        if response == .alertFirstButtonReturn {
-            endSessionEarly()
-        }
-    }
-    
-    private func endSessionEarly() {
-        guard let url = URL(string: "http://127.0.0.1:5050/api/session/end") else { return }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        // Pass early=true to apply XP penalty
-        let body: [String: Any] = ["early": true]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
-        URLSession.shared.dataTask(with: request) { [weak appState] data, response, error in
-            if error == nil {
-                DispatchQueue.main.async {
-                    withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                        appState?.isSessionActive = false
-                        appState?.sessionGoal = ""
-                        appState?.focusTimeMinutes = 0
-                    }
-                }
-            }
-        }.resume()
     }
 }
 
-// MARK: - Stat Card
+private struct StartSessionPanel: View {
+    @Binding var goalText: String
+    @Binding var workMinutes: Double
+    @Binding var breakMinutes: Double
 
-struct StatCard: View {
-    let label: String
-    let value: String
-    let unit: String
-    let icon: String
-    let color: Color
-    
+    let isStartingSession: Bool
+    let errorMessage: String?
+    let startAction: () -> Void
+
+    private var canStart: Bool {
+        !goalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStartingSession
+    }
+
     var body: some View {
-        HoverGlassCard(cornerRadius: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 16))
-                    .foregroundStyle(color)
-                
-                HStack(alignment: .lastTextBaseline, spacing: 4) {
-                    Text(value)
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .foregroundStyle(.primary)
-                    
-                    if !unit.isEmpty {
-                        Text(unit)
-                            .font(.system(size: 12, weight: .medium))
+        VStack(spacing: AppTheme.sectionSpacing) {
+            HStack(alignment: .top, spacing: AppTheme.sectionSpacing) {
+                HoverGlassCard(cornerRadius: 24) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Mission", systemImage: "target")
+                            .font(.headline)
                             .foregroundStyle(.secondary)
+
+                        TextField("What do you want to accomplish?", text: $goalText, axis: .vertical)
+                            .lineLimit(2...4)
+                            .textFieldStyle(.plain)
+                            .padding(14)
+                            .frame(minHeight: 118, alignment: .topLeading)
+                            .background {
+                                RoundedRectangle(cornerRadius: 14)
+                                    .fill(Color.white.opacity(0.06))
+                            }
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(AppTheme.glassStroke, lineWidth: 1)
+                            }
+                    }
+                    .padding(AppTheme.cardPadding)
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+
+                HoverGlassCard(cornerRadius: 24) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Session settings", systemImage: "slider.horizontal.3")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+
+                        TimerSlider(
+                            label: "Work duration",
+                            value: $workMinutes,
+                            range: 15...60,
+                            step: 5,
+                            unit: "min"
+                        )
+
+                        Divider()
+
+                        TimerSlider(
+                            label: "Break duration",
+                            value: $breakMinutes,
+                            range: 5...15,
+                            step: 5,
+                            unit: "min"
+                        )
+                    }
+                    .padding(AppTheme.cardPadding)
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+
+            HStack(alignment: .center, spacing: 16) {
+                LiquidButton(
+                    isStartingSession ? "Starting…" : "Start Focus Session",
+                    icon: isStartingSession ? "hourglass" : "play.fill",
+                    style: .primary,
+                    action: startAction
+                )
+                .disabled(!canStart)
+                .opacity(canStart ? 1 : 0.72)
+
+                if let errorMessage, !errorMessage.isEmpty {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.dangerTint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+}
+
+private struct ActiveSessionPanel: View {
+    let goal: String
+    let remainingSeconds: Int
+    let totalSeconds: Int
+    let isBreak: Bool
+    let totalXP: Int
+    let sessionXP: Int
+    let currentRank: String
+    let rankProgress: Double
+    let nextRankName: String
+    let xpToNextRank: Int
+    let focusTimeMinutes: Int
+    let isPaused: Bool
+    let pauseAction: () -> Void
+    let endAction: () -> Void
+    let skipAction: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 14) {
+                TimerDisplay(
+                    remainingSeconds: remainingSeconds,
+                    totalSeconds: totalSeconds,
+                    isBreak: isBreak
+                )
+                .frame(width: 236)
+
+                VStack(spacing: 10) {
+                    HoverGlassCard(cornerRadius: 24) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label("Current mission", systemImage: "target")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                Text(goal.isEmpty ? "No goal set" : goal)
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                            }
+
+                            HStack(spacing: 10) {
+                                StatCard(
+                                    title: "Focus Time",
+                                    value: "\(focusTimeMinutes)",
+                                    detail: "min",
+                                    tint: AppTheme.primaryTint,
+                                    icon: "clock.fill"
+                                )
+
+                                StatCard(
+                                    title: "Session XP",
+                                    value: "+\(sessionXP)",
+                                    detail: "earned",
+                                    tint: AppTheme.warningTint,
+                                    icon: "star.fill"
+                                )
+                            }
+
+                            Divider()
+
+                            XPDisplay(
+                                totalXP: totalXP,
+                                sessionXP: sessionXP,
+                                currentRank: currentRank,
+                                rankProgress: rankProgress,
+                                nextRankName: nextRankName,
+                                xpToNextRank: xpToNextRank,
+                                isCompact: false
+                            )
+                        }
+                        .padding(14)
                     }
                 }
-                
-                Text(label)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .tracking(0.5)
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+
+            HStack(spacing: 10) {
+                LiquidButton(
+                    isPaused ? "Resume" : "Pause",
+                    icon: isPaused ? "play.fill" : "pause.fill",
+                    style: .secondary,
+                    action: pauseAction
+                )
+
+                if let skipAction {
+                    LiquidButton("Skip Break", icon: "forward.fill", style: .success, action: skipAction)
+                }
+
+                LiquidButton("Quit Session", icon: "stop.fill", style: .danger, action: endAction)
+            }
+        }
+    }
+}
+
+private struct DashboardFooter: View {
+    let backendName: String
+    let screenMonitoringEnabled: Bool
+    let lastJudgmentText: String
+    let warningStatus: WarningStatus
+    let isCompact: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            HStack(spacing: 8) {
+                FooterChip(
+                    title: backendName,
+                    icon: "cpu",
+                    tint: AppTheme.primaryTint,
+                    isCompact: isCompact
+                )
+
+                if screenMonitoringEnabled {
+                    FooterChip(
+                        title: "Screen Monitoring On",
+                        icon: "eye.fill",
+                        tint: AppTheme.canvasAccent,
+                        isCompact: isCompact
+                    )
+                }
+
+                FooterChip(
+                    title: statusTitle,
+                    icon: statusIcon,
+                    tint: statusTint,
+                    isCompact: isCompact
+                )
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
+
+            if !lastJudgmentText.isEmpty {
+                Text(lastJudgmentText)
+                    .font(isCompact ? .caption : .subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(isCompact ? 1 : 2)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var statusTitle: String {
+        switch warningStatus {
+        case .green:
+            return "On Task"
+        case .yellow:
+            return "Thinking"
+        case .red:
+            return "Off Task"
+        }
+    }
+
+    private var statusIcon: String {
+        switch warningStatus {
+        case .green:
+            return "checkmark.circle.fill"
+        case .yellow:
+            return "exclamationmark.circle.fill"
+        case .red:
+            return "xmark.circle.fill"
+        }
+    }
+
+    private var statusTint: Color {
+        switch warningStatus {
+        case .green:
+            return AppTheme.successTint
+        case .yellow:
+            return AppTheme.warningTint
+        case .red:
+            return AppTheme.dangerTint
         }
     }
 }
 
-// MARK: - Preview
+private struct FooterChip: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    let isCompact: Bool
+
+    var body: some View {
+        Label(title, systemImage: icon)
+            .font(isCompact ? .caption2 : .subheadline)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, isCompact ? 8 : 12)
+            .padding(.vertical, isCompact ? 5 : 8)
+            .background {
+                Capsule()
+                    .fill(.thinMaterial)
+                    .overlay {
+                        Capsule()
+                            .stroke(tint.opacity(0.35), lineWidth: 1)
+                    }
+            }
+    }
+}
+
+private struct StatCard: View {
+    let title: String
+    let value: String
+    let detail: String
+    let tint: Color
+    let icon: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: icon)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .lastTextBaseline, spacing: 6) {
+                Text(value)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(tint)
+                
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(minHeight: 60, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .glassCard(cornerRadius: 18)
+    }
+}
+
+private struct InlineConfirmationOverlay: View {
+    let title: String
+    let message: String
+    let confirmTitle: String
+    let confirmStyle: LiquidButton.ButtonStyle
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onCancel)
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text(title)
+                    .font(.headline)
+
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 12) {
+                    LiquidButton("Keep Going", style: .secondary, action: onCancel)
+                    LiquidButton(confirmTitle, icon: "stop.fill", style: confirmStyle, action: onConfirm)
+                }
+            }
+            .padding(20)
+            .frame(width: 360)
+            .glassCard(cornerRadius: 22)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
 
 #Preview {
     DashboardView()

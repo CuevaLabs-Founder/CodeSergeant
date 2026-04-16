@@ -7,49 +7,70 @@
 
 import SwiftUI
 
+enum AppTheme {
+    static let panelWidth: CGFloat = 820
+    static let panelHeight: CGFloat = 430
+    static let shellInset: CGFloat = 8
+    static let chromePadding: CGFloat = 16
+    static let windowPadding: CGFloat = 20
+    static let sectionSpacing: CGFloat = 16
+    static let cardPadding: CGFloat = 16
+    static let compactSpacing: CGFloat = 12
+    static let controlMinHeight: CGFloat = 42
+    
+    static let canvasTop = Color(red: 0.13, green: 0.16, blue: 0.19)
+    static let canvasBottom = Color(red: 0.08, green: 0.10, blue: 0.12)
+    static let canvasAccent = Color(red: 0.33, green: 0.41, blue: 0.28)
+    static let primaryTint = Color(red: 0.31, green: 0.53, blue: 0.66)
+    static let successTint = Color(red: 0.34, green: 0.56, blue: 0.42)
+    static let dangerTint = Color(red: 0.70, green: 0.32, blue: 0.26)
+    static let warningTint = Color(red: 0.75, green: 0.58, blue: 0.25)
+    static let glassStroke = Color.white.opacity(0.18)
+    static let glassHighlight = Color.white.opacity(0.08)
+    static let panelShadow = Color.black.opacity(0.16)
+}
+
 // MARK: - Glass Card Modifier
 
 struct GlassCard: ViewModifier {
-    var cornerRadius: CGFloat = 20
-    var backgroundOpacity: Double = 0.3
-    var borderOpacity: Double = 0.5
-    var shadowRadius: CGFloat = 10
+    var cornerRadius: CGFloat = 18
+    var backgroundOpacity: Double = 1
+    var borderOpacity: Double = 1
+    var shadowRadius: CGFloat = 14
     var isHovering: Bool = false
     
     func body(content: Content) -> some View {
         content
-            // Frosted glass background
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .opacity(backgroundOpacity)
-            )
-            // Inner highlight (top-left light reflection)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(.thinMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .fill(AppTheme.glassHighlight.opacity(backgroundOpacity))
+                    }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius)
                     .stroke(
                         LinearGradient(
                             colors: [
-                                .white.opacity(borderOpacity),
-                                .white.opacity(borderOpacity * 0.3),
-                                .clear
+                                AppTheme.glassStroke.opacity(borderOpacity),
+                                Color.white.opacity(0.04),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
-                        lineWidth: 1
+                        lineWidth: isHovering ? 1.2 : 1
                     )
-            )
-            // Outer glow on hover
+            }
             .shadow(
-                color: isHovering ? .blue.opacity(0.2) : .black.opacity(0.1),
-                radius: isHovering ? shadowRadius * 1.5 : shadowRadius,
+                color: AppTheme.panelShadow,
+                radius: isHovering ? shadowRadius + 4 : shadowRadius,
                 x: 0,
-                y: isHovering ? 8 : 5
+                y: isHovering ? 8 : 4
             )
-            // Scale on hover
-            .scaleEffect(isHovering ? 1.02 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
+            .scaleEffect(isHovering ? 1.01 : 1)
+            .animation(.spring(response: 0.26, dampingFraction: 0.82), value: isHovering)
     }
 }
 
@@ -58,10 +79,10 @@ struct GlassCard: ViewModifier {
 extension View {
     /// Apply liquid glass card styling
     func glassCard(
-        cornerRadius: CGFloat = 20,
-        backgroundOpacity: Double = 0.3,
-        borderOpacity: Double = 0.5,
-        shadowRadius: CGFloat = 10,
+        cornerRadius: CGFloat = 18,
+        backgroundOpacity: Double = 1,
+        borderOpacity: Double = 1,
+        shadowRadius: CGFloat = 14,
         isHovering: Bool = false
     ) -> some View {
         modifier(GlassCard(
@@ -83,7 +104,7 @@ struct HoverGlassCard<Content: View>: View {
     
     @State private var isHovering = false
     
-    init(cornerRadius: CGFloat = 20, @ViewBuilder content: () -> Content) {
+    init(cornerRadius: CGFloat = 18, @ViewBuilder content: () -> Content) {
         self.cornerRadius = cornerRadius
         self.content = content()
     }
@@ -103,27 +124,34 @@ struct HoverGlassCard<Content: View>: View {
 
 /// Full-screen glass background with depth effect
 struct GlassBackground: View {
-    var opacity: Double = 0.5
+    var opacity: Double = 0.85
     
     var body: some View {
         ZStack {
-            // Base dark color
-            Color.black.opacity(0.3)
-            
-            // Gradient overlay for depth
             LinearGradient(
-                colors: [
-                    Color.blue.opacity(0.05),
-                    Color.purple.opacity(0.05),
-                    Color.clear
-                ],
+                colors: [AppTheme.canvasTop, AppTheme.canvasBottom],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            
-            // Noise texture overlay (simulated)
+
+            RadialGradient(
+                colors: [AppTheme.canvasAccent.opacity(0.32), .clear],
+                center: .topLeading,
+                startRadius: 40,
+                endRadius: 420
+            )
+
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.05),
+                    Color.clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
             Rectangle()
-                .fill(.ultraThinMaterial)
+                .fill(.regularMaterial)
                 .opacity(opacity)
         }
         .ignoresSafeArea()
@@ -135,19 +163,19 @@ struct GlassBackground: View {
 /// Glass card with animated gradient border
 struct AnimatedGlassBorder: ViewModifier {
     @State private var animationProgress: CGFloat = 0
-    var cornerRadius: CGFloat = 20
+    var cornerRadius: CGFloat = 18
     
     func body(content: Content) -> some View {
         content
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius)
                     .stroke(
                         AngularGradient(
                             gradient: Gradient(colors: [
-                                .blue.opacity(0.6),
-                                .purple.opacity(0.6),
-                                .pink.opacity(0.6),
-                                .blue.opacity(0.6)
+                                AppTheme.primaryTint.opacity(0.55),
+                                AppTheme.canvasAccent.opacity(0.55),
+                                Color.white.opacity(0.5),
+                                AppTheme.primaryTint.opacity(0.55)
                             ]),
                             center: .center,
                             startAngle: .degrees(animationProgress * 360),
@@ -155,8 +183,8 @@ struct AnimatedGlassBorder: ViewModifier {
                         ),
                         lineWidth: 2
                     )
-                    .opacity(0.5)
-            )
+                    .opacity(0.4)
+            }
             .onAppear {
                 withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
                     animationProgress = 1
@@ -166,7 +194,7 @@ struct AnimatedGlassBorder: ViewModifier {
 }
 
 extension View {
-    func animatedGlassBorder(cornerRadius: CGFloat = 20) -> some View {
+    func animatedGlassBorder(cornerRadius: CGFloat = 18) -> some View {
         modifier(AnimatedGlassBorder(cornerRadius: cornerRadius))
     }
 }
@@ -204,4 +232,3 @@ extension View {
     .frame(width: 400, height: 400)
     .background(GlassBackground())
 }
-

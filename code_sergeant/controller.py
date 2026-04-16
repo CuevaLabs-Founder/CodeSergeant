@@ -28,7 +28,8 @@ from .storage import (
     write_session_log,
 )
 from .tts import TTSService
-from .voice import VoiceWorker, WakeWordDetector, run_voice_worker
+from .note_recorder import NoteRecorder
+from .voice import VoiceWorker, WakeWordDetector, load_whisper_backend, run_voice_worker
 from .xp_manager import XPManager
 
 logger = logging.getLogger("code_sergeant.controller")
@@ -91,6 +92,10 @@ class AppController:
         # Initialize AI client first (OpenAI + Ollama fallback)
         self.ai_client = create_ai_client(self.config)
 
+        # Preload common responses for instant delivery
+        self._preloaded_responses = {}
+        self._last_quit_session_key = None
+
         # Initialize services
         self.native_monitor = NativeMonitor()
         self.judge = ActivityJudge(
@@ -109,6 +114,7 @@ class AppController:
             model_id=self.config["tts"].get("model_id", "eleven_turbo_v2_5"),
             rate=self.config["tts"].get("rate", 150),
             volume=self.config["tts"].get("volume", 0.8),
+            optimize_for_speed=self.config["tts"].get("optimize_for_speed", False),
         )
         self.tts_service.start()
 
@@ -123,6 +129,10 @@ class AppController:
         # Voice worker (initialized lazily)
         self.voice_worker: Optional[VoiceWorker] = None
 
+        # Note recorder — Whisper base model loaded on first use
+        self._note_whisper_model = None
+        self._taking_note: bool = False  # Suppresses off-task judgment during dictation
+
         # Wake word detector
         self.wake_word_detector: Optional[WakeWordDetector] = None
         self._init_wake_word_detector()
@@ -131,9 +141,12 @@ class AppController:
         if self.wake_word_detector and self.config.get("voice_activation", {}).get(
             "enabled", False
         ):
-            self.wake_word_detector.start()
-            self.state.wake_word_active = True
-            logger.info("Wake word detection started on initialization")
+            started = self.wake_word_detector.start()
+            self.state.wake_word_active = bool(started)
+            if started:
+                logger.info("Wake word detection started on initialization")
+            else:
+                logger.warning("Wake word detection is enabled in config but unavailable")
 
         # Session state
         self.current_activity: Optional[ActivityEvent] = None
@@ -175,15 +188,52 @@ class AppController:
         """Initialize wake word detector if enabled."""
         if self.config.get("voice_activation", {}).get("enabled", False):
             wake_words = [self.personality_manager.wake_word]
+            note_wake_word = self.config.get("notes", {}).get(
+                "wake_word", "take note sergeant"
+            )
             self.wake_word_detector = WakeWordDetector(
                 wake_words=wake_words,
+                note_wake_words=[note_wake_word],
                 sensitivity=self.config.get("voice_activation", {}).get(
                     "sensitivity", 0.5
+                ),
+                input_device_name=self.config.get("voice_activation", {}).get(
+                    "input_device_name"
                 ),
                 on_wake_word=self._on_wake_word_detected,
                 on_note_taking=self._on_note_taking_triggered,
             )
-            logger.info(f"Wake word detector initialized with: {wake_words}")
+            logger.info(
+                f"Wake word detector initialized — commands: {wake_words}, "
+                f"notes: [{note_wake_word}]"
+            )
+
+    def apply_voice_runtime_config(self) -> None:
+        """Apply voice-activation config changes to live workers."""
+        voice_activation = self.config.get("voice_activation", {})
+        input_device_name = voice_activation.get("input_device_name")
+
+        if self.voice_worker:
+            self.voice_worker.set_input_device(input_device_name)
+
+        if not self.wake_word_detector:
+            return
+
+        was_running = self.wake_word_detector.is_running
+        if was_running:
+            self.wake_word_detector.stop()
+
+        self.wake_word_detector.sensitivity = voice_activation.get("sensitivity", 0.5)
+        self.wake_word_detector.set_wake_words([self.personality_manager.wake_word])
+        note_wake_word = self.config.get("notes", {}).get("wake_word", "take note sergeant")
+        self.wake_word_detector.set_note_wake_words([note_wake_word])
+        self.wake_word_detector.set_input_device(input_device_name)
+
+        if voice_activation.get("enabled", False) and was_running:
+            started = self.wake_word_detector.start()
+            self.state.wake_word_active = bool(started)
+        elif not voice_activation.get("enabled", False):
+            self.state.wake_word_active = False
 
     def _on_wake_word_detected(self, wake_word: str):
         """Handle wake word detection."""
@@ -259,6 +309,7 @@ class AppController:
         self.activity_history = []
         self.last_judgment = None
         self.last_yell_time = None
+        self._last_quit_session_key = None
 
         # Reset judge patterns
         self.judge.reset_patterns()
@@ -276,16 +327,15 @@ class AppController:
         # Start workers
         self._start_workers()
 
-        # Auto-start pomodoro if configured
-        if self.config.get("pomodoro", {}).get("auto_start_with_session", False):
+        # Auto-start pomodoro with the session (opt out via pomodoro.auto_start_with_session)
+        if self.config.get("pomodoro", {}).get("auto_start_with_session", True):
             self.pomodoro.start_work()
 
         # Start wake word detector if configured
         if self.wake_word_detector and self.config.get("voice_activation", {}).get(
             "enabled", False
         ):
-            self.wake_word_detector.start()
-            self.state.wake_word_active = True
+            self.state.wake_word_active = bool(self.wake_word_detector.start())
 
         # Start motivation monitor if enabled
         if self.config.get("motivation", {}).get("enabled", True):
@@ -299,7 +349,34 @@ class AppController:
         phrase = self.personality_manager.get_phrase("session_start")
         self.tts_service.speak(phrase or "Session started!")
 
+        # Preload common quit responses for instant delivery
+        self._preload_quit_responses()
+
         logger.info("Session started")
+
+    def _preload_quit_responses(self):
+        """Preload common quit responses for instant delivery."""
+        common_scenarios = [
+            {"early": True, "distractions": 0, "goal": "work"},
+            {"early": True, "distractions": 2, "goal": "coding"},
+            {"early": True, "distractions": 5, "goal": "study"},
+            {"early": False, "distractions": 0, "goal": "work"},
+            {"early": False, "distractions": 3, "goal": "project"},
+        ]
+        
+        for scenario in common_scenarios:
+            context = {
+                **scenario,
+                "personality": self.state.personality_name,
+                "session_duration_minutes": 25  # Default estimate
+            }
+            key = f"{scenario['early']}_{scenario['distractions']}_{scenario['goal'][:10]}"
+            try:
+                response = self.personality_manager.get_phrase("session_quit", context)
+                self._preloaded_responses[key] = response
+                logger.debug(f"Preloaded quit response for scenario: {key}")
+            except Exception as e:
+                logger.warning(f"Failed to preload response for {key}: {e}")
 
     def end_session(self, early: bool = False) -> Dict[str, Any]:
         """
@@ -316,6 +393,11 @@ class AppController:
             return {}
 
         logger.info(f"Ending session (early={early})")
+
+        goal = self.state.goal or "Unknown"
+        stats = self.state.stats
+        focus_minutes = int(stats.focus_seconds / 60) if stats else 0
+        distractions = stats.distractions_count if stats else 0
 
         # Signal workers to stop
         self.stop_event.set()
@@ -349,9 +431,9 @@ class AppController:
                     logger.warning(f"Worker {name} did not stop within timeout")
 
         # Update stats
-        if self.state.stats.start_time:
-            self.state.stats.end_time = datetime.now()
-            self.state.stats.pomodoros_completed = (
+        if stats and stats.start_time:
+            stats.end_time = datetime.now()
+            stats.pomodoros_completed = (
                 self.pomodoro.state.pomodoros_completed
             )
 
@@ -365,8 +447,8 @@ class AppController:
         # Write session log
         try:
             log_file = write_session_log(
-                self.state.stats,
-                self.state.goal or "Unknown",
+                stats,
+                goal,
                 self.config,
                 personality_name=self.state.personality_name,
             )
@@ -374,17 +456,67 @@ class AppController:
         except Exception as e:
             logger.error(f"Error writing session log: {e}")
 
-        # Speak summary
-        if self.state.stats.start_time and self.state.stats.end_time:
-            focus_minutes = int(self.state.stats.focus_seconds / 60)
-            phrase = self.personality_manager.get_phrase("session_end")
-            summary = phrase or get_session_summary_template().format(
-                focus_minutes=focus_minutes,
-                distractions=self.state.stats.distractions_count,
-            )
-            self.tts_service.speak(summary)
+        # Generate witty AI personality-based message for session quit (prevent duplicates)
+        if stats and stats.start_time and stats.end_time:
+            should_generate_quit_message = True
+            
+            # Check if we already generated a quit message for this session
+            if hasattr(self, '_last_quit_session_key'):
+                current_session_key = f"{focus_minutes}_{distractions}_{early}"
+                if self._last_quit_session_key == current_session_key:
+                    logger.info("Skip duplicate quit message generation")
+                    should_generate_quit_message = False
+            
+            if should_generate_quit_message:
+                # Try to use preloaded response first for instant delivery
+                goal_key = goal[:10]
+                preloaded_key = f"{early}_{distractions}_{goal_key}"
+                message = self._preloaded_responses.get(preloaded_key)
+                
+                if not message:
+                    # Generate AI-powered witty remark about quitting session
+                    context = {
+                        "session_duration_minutes": focus_minutes,
+                        "distractions_count": distractions,
+                        "is_early_quit": early,
+                        "goal": goal,
+                        "personality": self.state.personality_name
+                    }
+                    
+                    # Get AI-generated witty quit message
+                    message = self.personality_manager.get_phrase("session_quit", context)
+                    
+                    # Cache this response for potential reuse
+                    self._preloaded_responses[preloaded_key] = message
+                    logger.debug(f"Cached new quit response: {preloaded_key}")
+                
+                # Store session key to prevent duplicates
+                self._last_quit_session_key = f"{focus_minutes}_{distractions}_{early}"
+                
+                # Fallback if AI generation fails
+                if not message:
+                    if early:
+                        message = f"Quitting after {focus_minutes} minutes with {distractions} distractions. The mission continues when you're ready!"
+                    else:
+                        message = f"Session complete! {focus_minutes} minutes focused. Mission accomplished!"
+                
+                # Speak in background thread to avoid blocking session end
+                threading.Thread(
+                    target=self.tts_service.speak,
+                    args=(message,),
+                    daemon=True
+                ).start()
 
         self.state.session_active = False
+        self.state.goal = None
+        self.state.current_activity = None
+        self.state.last_judgment = None
+        self.state.last_judgment_obj = None
+        self.state.stats = SessionStats()
+        self.current_activity = None
+        self.activity_history = []
+        self.last_judgment = None
+        self.last_yell_time = None
 
         # Reset stop event for next session
         self.stop_event.clear()
@@ -393,8 +525,8 @@ class AppController:
 
         # Return session summary
         return {
-            "focus_minutes": int(self.state.stats.focus_seconds / 60) if self.state.stats else 0,
-            "distractions": self.state.stats.distractions_count if self.state.stats else 0,
+            "focus_minutes": focus_minutes,
+            "distractions": distractions,
             "session_xp": session_xp,
             "xp_penalty": xp_penalty,
             "total_xp": self.xp_manager.state.total_xp,
@@ -421,9 +553,10 @@ class AppController:
             time.sleep(self.drill_interval)
 
             while not self.drill_stop_event.is_set() and self.state.session_active:
-                # Check if still off_task
+                # Check if still off_task (note-taking is always on-task)
                 if (
-                    self.state.last_judgment_obj
+                    not self._taking_note
+                    and self.state.last_judgment_obj
                     and self.state.last_judgment_obj.classification == "off_task"
                 ):
                     # Get a drill phrase and speak it
@@ -533,20 +666,36 @@ class AppController:
         self.tts_service.speak(f"Goal updated to: {new_goal}")
         logger.info(f"Goal changed: {old_goal} -> {new_goal}")
 
-    def save_voice_note(self, content: str, transcription: str = "") -> None:
-        """Save a voice note to both session stats and a text file."""
-        # Save to session stats if session is active
-        if self.state.stats:
-            add_voice_note(self.state.stats, content, transcription)
+    def save_voice_note(self, raw: str, cleaned: Optional[str] = None) -> None:
+        """
+        Persist a voice note to session stats and to the user's notes folder.
 
-        # Always save to text file (works even without session)
+        Args:
+            raw: Raw Whisper transcript.
+            cleaned: Optional LLM-cleaned version. When provided, both versions
+                are written to the same file and the cleaned text is used as the
+                session-stats content.
+        """
+        display_content = cleaned if cleaned else raw
+
+        # Attach to live session stats
+        if self.state.stats:
+            add_voice_note(self.state.stats, display_content, raw)
+
+        # Always write to file (works with or without an active session)
         try:
-            note_file = save_note_to_file(content)
-            self.tts_service.speak(f"Note saved to {Path(note_file).name}")
-            logger.info(f"Voice note saved to file: {note_file}")
+            notes_folder = self.config.get("notes", {}).get("notes_folder")
+            note_file = save_note_to_file(
+                raw=raw,
+                cleaned=cleaned,
+                notes_folder=notes_folder,
+                session_goal=self.state.goal,
+            )
+            self.tts_service.speak("Saved.")
+            logger.info(f"Voice note saved: {note_file}")
         except Exception as e:
             logger.error(f"Error saving note to file: {e}")
-            self.tts_service.speak("Note saved to session, but failed to save to file.")
+            self.tts_service.speak("Saved to session, but file write failed.")
 
     def report_distraction(self, reason: str, is_phone: bool = False) -> None:
         """Report a distraction."""
@@ -562,6 +711,7 @@ class AppController:
         personality_name: str,
         custom_description: str = None,
         custom_wake_word: str = None,
+        speak_confirmation: bool = True,
     ) -> None:
         """
         Change the personality.
@@ -570,6 +720,7 @@ class AppController:
             personality_name: Name of personality
             custom_description: Description for custom personality
             custom_wake_word: Wake word for custom personality
+            speak_confirmation: If True, speak a short confirmation (e.g. voice UI)
         """
         # Update config
         self.config = update_personality(
@@ -593,9 +744,10 @@ class AppController:
         self.judge.set_personality_manager(self.personality_manager)
 
         logger.info(f"Personality changed to: {personality_name}")
-        self.tts_service.speak(
-            f"Personality changed. Say '{self.state.wake_word}' to talk to me!"
-        )
+        if speak_confirmation:
+            self.tts_service.speak(
+                f"Personality changed. Say '{self.state.wake_word}' to talk to me!"
+            )
 
     def toggle_wake_word(self, enabled: bool) -> None:
         """Toggle wake word detection."""
@@ -607,9 +759,12 @@ class AppController:
                 self._init_wake_word_detector()
             # Start wake word detector regardless of session state
             if self.wake_word_detector:
-                self.wake_word_detector.start()
-                self.state.wake_word_active = True
-                logger.info("Wake word detection started")
+                started = self.wake_word_detector.start()
+                self.state.wake_word_active = bool(started)
+                if started:
+                    logger.info("Wake word detection started")
+                else:
+                    logger.warning("Wake word detection could not start")
         else:
             if self.wake_word_detector:
                 self.wake_word_detector.stop()
@@ -693,6 +848,10 @@ class AppController:
 
     def _handle_judgment_update(self, event: Dict[str, Any]) -> None:
         """Handle judgment update event."""
+        # Note-taking is always on-task — ignore judgments during dictation.
+        if self._taking_note:
+            return
+
         judgment = event.get("judgment")
         if isinstance(judgment, dict):
             judgment = Judgment(**judgment)
@@ -750,7 +909,7 @@ class AppController:
         elif command == "change_goal" and args:
             self.change_goal(args)
         elif command == "save_note" and args:
-            self.save_voice_note(args, event.get("transcript", ""))
+            self.save_voice_note(raw=args)
         elif command == "start_note_taking":
             # User said "take a note" without content - start VAD recording
             self.start_note_taking()
@@ -824,6 +983,9 @@ class AppController:
                 sample_rate=self.config["voice"]["sample_rate"],
                 ollama_model=self.config["ollama"]["model"],
                 ollama_base_url=self.config["ollama"]["base_url"],
+                input_device_name=self.config.get("voice_activation", {}).get(
+                    "input_device_name"
+                ),
                 tts_service=self.tts_service,
                 personality_manager=self.personality_manager,
             )
@@ -864,80 +1026,77 @@ class AppController:
 
     def start_note_taking(self) -> None:
         """
-        Start note-taking mode with VAD-based recording.
+        Start note-taking mode.
 
-        Uses voice activity detection to record until silence is detected
-        (after speech) or max duration is reached.
+        Records via VAD: stops automatically when the user stops speaking
+        (configurable silence window) or after a 60-second timeout.
+        A double-beep warns at 15 seconds remaining.
+        Note-taking suppresses off-task judgment for its duration.
         """
-        # Stop wake word detector to avoid microphone conflicts
+        notes_cfg = self.config.get("notes", {})
+
+        # Lazy-load the Whisper base model (shared across calls)
+        if self._note_whisper_model is None:
+            self._note_whisper_model = load_whisper_backend("base", "Note recorder")
+
+        # Stop wake word detector to avoid microphone conflict
         wake_word_was_active = self.state.wake_word_active
         if self.wake_word_detector and wake_word_was_active:
             self.wake_word_detector.stop()
             self.state.wake_word_active = False
             logger.info("Wake word detector paused for note-taking")
 
-        # Note-taking max duration (default 2 minutes since we wait for stop phrase)
-        max_note_duration = self.config.get("voice", {}).get("note_record_seconds", 120)
-
-        # Initialize voice worker for note-taking
-        note_worker = VoiceWorker(
-            record_seconds=max_note_duration,  # Fallback duration
+        recorder = NoteRecorder(
             sample_rate=self.config["voice"]["sample_rate"],
-            ollama_model=self.config["ollama"]["model"],
-            ollama_base_url=self.config["ollama"]["base_url"],
-            tts_service=self.tts_service,
-            personality_manager=self.personality_manager,
+            silence_threshold_seconds=notes_cfg.get("silence_threshold_seconds", 2.0),
+            max_duration_seconds=notes_cfg.get("max_duration_seconds", 60),
+            min_words=notes_cfg.get("min_words", 4),
+            input_device_name=self.config.get("voice_activation", {}).get(
+                "input_device_name"
+            ),
+            whisper_model=self._note_whisper_model,
         )
 
         def note_taking_thread():
+            self._taking_note = True
             try:
-                # IMPORTANT: Clear any pending TTS messages (warnings/drills) before recording
-                # to prevent them from bleeding into the note transcript
-                cleared = self.tts_service.clear_queue()
-                if cleared > 0:
-                    logger.info(
-                        f"Cleared {cleared} pending TTS messages before note-taking"
-                    )
+                # Silence any pending drills/TTS before opening the mic
+                self.tts_service.cancel_all()
+                self.tts_service.wait_for_completion(timeout=3.0)
+                time.sleep(0.3)  # Let audio hardware settle
 
-                # Wait for any currently-speaking TTS to finish
+                # Short prompt — just enough for the user to know we're listening
+                self.tts_service.speak("Go ahead.")
                 self.tts_service.wait_for_completion(timeout=5.0)
+                time.sleep(0.4)
 
-                # Brief pause to ensure audio playback fully stops
-                time.sleep(0.3)
+                logger.info("Note recorder started")
+                raw = recorder.record()
 
-                # Announce note-taking mode with instructions
-                self.tts_service.speak("Go ahead. Say 'end note' when you're done.")
+                if not raw:
+                    self.tts_service.speak("Nothing captured.")
+                    logger.warning("Note-taking: empty or too-short transcript")
+                    return
 
-                # Wait for the instruction TTS to actually finish speaking
-                self.tts_service.wait_for_completion(timeout=10.0)
-                time.sleep(0.5)  # Additional buffer for audio system
+                # Optional LLM cleanup
+                cleaned: Optional[str] = None
+                if notes_cfg.get("llm_cleanup", False):
+                    cleaned = self._llm_cleanup_note(raw)
 
-                # Record until user says stop phrase (e.g., "end note")
-                logger.info(
-                    f"Note-taking: Recording until stop phrase (max {max_note_duration}s)..."
-                )
-                transcript = note_worker.record_note(max_duration=max_note_duration)
+                self.save_voice_note(raw=raw, cleaned=cleaned)
+                logger.info(f"Note saved ({len(raw.split())} words)")
 
-                if transcript and transcript.strip():
-                    # Save the note
-                    self.save_voice_note(transcript.strip())
-                    logger.info(f"Note saved: {transcript[:50]}...")
-                else:
-                    self.tts_service.speak("I didn't catch that. Try again.")
-                    logger.warning("Note-taking: Empty transcript")
-
-            except PermissionError:
-                raise
             except Exception as e:
                 logger.error(f"Note-taking error: {e}")
-                self.tts_service.speak("Sorry, there was an error saving your note.")
+                self.tts_service.speak("Error saving note.")
                 self.event_queue.put(
                     {"type": "error_event", "message": f"Note-taking error: {e}"}
                 )
             finally:
-                # Resume wake word detector if it was active
+                self._taking_note = False
+                # Resume wake word detector
                 if wake_word_was_active and self.wake_word_detector:
-                    time.sleep(0.3)  # Brief pause before resuming
+                    time.sleep(0.3)
                     self.wake_word_detector.start()
                     self.state.wake_word_active = True
                     logger.info("Wake word detector resumed after note-taking")
@@ -945,6 +1104,38 @@ class AppController:
         thread = threading.Thread(target=note_taking_thread, daemon=True)
         thread.start()
         logger.info("Note-taking mode started")
+
+    def _llm_cleanup_note(self, raw: str) -> Optional[str]:
+        """
+        Run an LLM pass over a raw voice note transcript.
+
+        Fixes punctuation and capitalisation. Formats multiple ideas as
+        bullet points when appropriate. Never removes content.
+
+        Returns the cleaned string, or None if the call fails.
+        """
+        try:
+            import ollama
+
+            prompt = (
+                "Clean up this voice note transcript. "
+                "Fix punctuation, capitalisation, and grammar. "
+                "If it lists multiple distinct ideas, format them as bullet points. "
+                "Preserve every idea — do not summarise or remove anything.\n\n"
+                f'Raw transcript: "{raw}"\n\n'
+                "Cleaned note:"
+            )
+            client = ollama.Client(host=self.config["ollama"]["base_url"])
+            response = client.generate(
+                model=self.config["ollama"]["model"],
+                prompt=prompt,
+                options={"temperature": 0.2, "num_predict": 500},
+            )
+            cleaned = (response.get("response") or "").strip()
+            return cleaned if cleaned else None
+        except Exception as e:
+            logger.warning(f"LLM note cleanup failed: {e}")
+            return None
 
     def _start_workers(self):
         """Start all worker threads."""

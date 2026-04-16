@@ -233,32 +233,56 @@ def get_session_summary(stats: SessionStats) -> Dict[str, Any]:
     }
 
 
-def save_note_to_file(content: str, notes_dir: str = "notes") -> str:
+def save_note_to_file(
+    raw: str,
+    cleaned: Optional[str] = None,
+    notes_folder: Optional[str] = None,
+    session_goal: Optional[str] = None,
+) -> str:
     """
-    Save a note to a text file.
+    Save a voice note to a Markdown file in the user's notes folder.
+
+    The file always contains the raw Whisper transcript. If an LLM-cleaned
+    version is provided it is written in a separate section in the same file
+    so the user can compare or copy either version.
 
     Args:
-        content: Note content to save
-        notes_dir: Directory to save notes in
+        raw: Raw Whisper transcript (always saved).
+        cleaned: Optional LLM-cleaned version.
+        notes_folder: Absolute path to the folder. Falls back to
+            ~/Documents/CodeSergeant/notes if None or empty.
+        session_goal: Active session goal, included as context in the file header.
 
     Returns:
-        Path to saved note file
+        Absolute path to the saved note file.
     """
-    # Create notes directory if needed
-    notes_path = Path(notes_dir)
-    notes_path.mkdir(exist_ok=True)
+    folder = Path(notes_folder).expanduser() if notes_folder else (
+        Path.home() / "Documents" / "CodeSergeant" / "notes"
+    )
+    folder.mkdir(parents=True, exist_ok=True)
 
-    # Generate filename with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    note_file = notes_path / f"note_{timestamp}.txt"
+    now = datetime.now()
+    timestamp_display = now.strftime("%Y-%m-%d %H:%M")
+    timestamp_file = now.strftime("%Y%m%d_%H%M%S")
+    note_file = folder / f"note_{timestamp_file}.md"
 
-    # Write note to file
+    lines: list[str] = [f"# Note — {timestamp_display}\n"]
+    if session_goal:
+        lines.append(f"**Session goal:** {session_goal}\n")
+    lines.append("\n---\n")
+
+    if cleaned:
+        lines.append("## Cleaned\n\n")
+        lines.append(cleaned.strip())
+        lines.append("\n\n## Raw transcript\n\n")
+        lines.append(raw.strip())
+        lines.append("\n")
+    else:
+        lines.append(raw.strip())
+        lines.append("\n")
+
     try:
-        with open(note_file, "w", encoding="utf-8") as f:
-            f.write(f"Note created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("=" * 50 + "\n\n")
-            f.write(content)
-            f.write("\n")
+        note_file.write_text("".join(lines), encoding="utf-8")
         logger.info(f"Note saved to {note_file}")
         return str(note_file)
     except Exception as e:

@@ -25,7 +25,9 @@ from code_sergeant.ai_client import create_ai_client  # noqa: E402
 from code_sergeant.config import load_config, save_config, set_env_var  # noqa: E402
 from code_sergeant.controller import AppController  # noqa: E402
 from code_sergeant.native_monitor import NativeMonitor  # noqa: E402
+from code_sergeant.personality import get_personality_choices  # noqa: E402
 from code_sergeant.tts import TTSService  # noqa: E402
+from code_sergeant.voice import list_input_devices, resolve_input_device  # noqa: E402
 
 # Set up logging
 logging.basicConfig(
@@ -43,6 +45,43 @@ native_monitor: Optional[NativeMonitor] = None
 tts_service: Optional[TTSService] = None
 
 
+def _apply_tts_runtime_config(tts: Optional[TTSService], cfg: Dict[str, Any]) -> None:
+    """
+    Apply TTS settings from merged config + environment to the live service.
+
+    Sessions use controller.tts_service — this keeps voice/model in sync after PATCH or key save.
+    """
+    if not tts or not cfg:
+        return
+    t = cfg.get("tts") or {}
+    api_key = (
+        os.getenv("ELEVENLABS_API_KEY")
+        or t.get("elevenlabs_api_key")
+        or t.get("api_key")
+    )
+    provider = (t.get("provider") or "pyttsx3").lower()
+    if provider == "elevenlabs" and api_key:
+        tts.set_api_key(api_key)
+    if t.get("model_id"):
+        tts.model_id = t["model_id"]
+    if t.get("optimize_for_speed") is not None:
+        tts.optimize_for_speed = bool(t["optimize_for_speed"])
+    if t.get("voice_id"):
+        tts.set_voice(t["voice_id"])
+    if t.get("rate") is not None and getattr(tts, "engine", None):
+        try:
+            tts.rate = int(t["rate"])
+            tts.engine.setProperty("rate", tts.rate)
+        except Exception:
+            pass
+    if t.get("volume") is not None and getattr(tts, "engine", None):
+        try:
+            tts.volume = float(t["volume"])
+            tts.engine.setProperty("volume", tts.volume)
+        except Exception:
+            pass
+
+
 def initialize_services():
     """Initialize all backend services."""
     global controller, config, native_monitor, tts_service
@@ -55,21 +94,29 @@ def initialize_services():
     # Initialize native monitor
     native_monitor = NativeMonitor()
 
-    # Initialize TTS
-    tts_service = TTSService(
-        provider=config["tts"].get("provider", "pyttsx3"),
-        api_key=config["tts"].get("elevenlabs_api_key")
-        or os.getenv("ELEVENLABS_API_KEY"),
-        voice_id=config["tts"].get("voice_id"),
-        model_id=config["tts"].get("model_id", "eleven_turbo_v2_5"),
-        rate=config["tts"].get("rate", 150),
-        volume=config["tts"].get("volume", 0.8),
-    )
-
-    # Initialize controller (it loads its own config internally)
+    # Controller owns the TTS instance used for sessions, reminders, and judgments.
     controller = AppController()
+    tts_service = controller.tts_service
 
     logger.info("Services initialized successfully")
+
+
+@app.route("/api/shutdown", methods=["POST"])
+def shutdown_server():
+    """Shutdown the bridge server."""
+    logger.info("Shutdown requested via API")
+    
+    # Schedule shutdown after response is sent
+    def shutdown():
+        import threading
+        import time
+        time.sleep(0.5)  # Give time for response to be sent
+        logger.info("Shutting down bridge server...")
+        os._exit(0)  # Force exit
+    
+    threading.Thread(target=shutdown, daemon=True).start()
+    
+    return jsonify({"success": True, "message": "Server shutting down"})
 
 
 # ============================================================================
@@ -101,7 +148,7 @@ def get_status():
         {
             "session_active": state.session_active,
             "focus_time_minutes": focus_time_minutes,
-            "current_goal": state.goal,
+            "current_goal": state.goal if state.session_active else None,
             "personality": state.personality_name,
             "timestamp": datetime.now().isoformat(),
         }
@@ -453,6 +500,12 @@ def update_config():
     # Save to disk
     save_config(config)
 
+    # Keep AppController in sync (it holds its own config + live TTS used for sessions)
+    if controller:
+        controller.config = load_config()
+        _apply_tts_runtime_config(controller.tts_service, controller.config)
+        controller.apply_voice_runtime_config()
+
     return jsonify({"success": True, "message": "Config updated"})
 
 
@@ -488,9 +541,83 @@ def set_openai_key():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/elevenlabs-key", methods=["POST"])
+def set_elevenlabs_key():
+    """Set ElevenLabs API key securely (stored in .env as ELEVENLABS_API_KEY)."""
+    data = request.json or {}
+    api_key = data.get("api_key", "")
+
+    if not api_key:
+        return jsonify({"error": "API key required"}), 400
+
+    try:
+        set_env_var("ELEVENLABS_API_KEY", api_key)
+
+        if tts_service:
+            tts_service.set_api_key(api_key)
+        if controller:
+            controller.config = load_config()
+            _apply_tts_runtime_config(controller.tts_service, controller.config)
+
+        return jsonify(
+            {"success": True, "message": "ElevenLabs API key saved securely"}
+        )
+    except Exception as e:
+        logger.error(f"Failed to set ElevenLabs key: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # ============================================================================
 # TTS & Voice
 # ============================================================================
+
+
+@app.route("/api/tts/status", methods=["GET"])
+def get_tts_status():
+    """Return TTS provider status (no secrets)."""
+    if not tts_service:
+        return jsonify({"error": "TTS service not initialized"}), 500
+
+    return jsonify(tts_service.get_status())
+
+
+@app.route("/api/audio/input-devices", methods=["GET"])
+def list_audio_input_devices():
+    """List available input devices and the current microphone selection."""
+    selected_device_name = config.get("voice_activation", {}).get("input_device_name")
+    devices = list_input_devices()
+    _, resolved_device = resolve_input_device(selected_device_name)
+    default_device = next((device for device in devices if device.get("is_default")), None)
+
+    return jsonify(
+        {
+            "devices": devices,
+            "selected_device_name": selected_device_name,
+            "resolved_device_name": resolved_device.get("name")
+            if resolved_device
+            else None,
+            "default_device_name": default_device.get("name")
+            if default_device
+            else None,
+            "using_default": not selected_device_name
+            or (resolved_device is not None and resolved_device.get("name") != selected_device_name),
+        }
+    )
+
+
+@app.route("/api/tts/voices", methods=["GET"])
+def list_tts_voices():
+    """List voices for the current TTS provider (ElevenLabs + system voices when available)."""
+    if not tts_service:
+        return jsonify({"error": "TTS service not initialized"}), 500
+
+    force = (request.args.get("refresh") or "").lower() in ("1", "true", "yes")
+    try:
+        voices = tts_service.get_available_voices(force_refresh=force)
+        return jsonify({"voices": voices})
+    except Exception as e:
+        logger.warning(f"Failed to list TTS voices: {e}")
+        return jsonify({"error": str(e), "voices": []}), 500
 
 
 @app.route("/api/tts/speak", methods=["POST"])
@@ -529,31 +656,42 @@ def get_personality():
         return jsonify({"error": "Personality manager not available"}), 500
 
     pm = controller.personality_manager
+    prof = pm.profile
     return jsonify(
         {
-            "name": pm.get_profile_name()
-            if hasattr(pm, "get_profile_name")
-            else "unknown",
-            "available_profiles": pm.get_available_profiles()
-            if hasattr(pm, "get_available_profiles")
-            else [],
+            "name": prof.name,
+            "wake_word_name": prof.wake_word_name,
+            "description": prof.description,
+            "tone": prof.tone,
+            "available_profiles": get_personality_choices(),
         }
     )
 
 
 @app.route("/api/personality", methods=["POST"])
 def set_personality():
-    """Change personality profile."""
+    """Change personality profile (persists to config.json via AppController)."""
     data = request.json or {}
-    profile_name = data.get("profile", "drill_sergeant")
+    profile_name = data.get("profile", "sergeant")
+    custom_description = data.get("custom_description")
+    custom_wake_word = data.get("custom_wake_word")
 
-    if not controller or not hasattr(controller, "personality_manager"):
-        return jsonify({"error": "Personality manager not available"}), 500
+    if not controller:
+        return jsonify({"error": "Controller not available"}), 500
 
     try:
-        controller.personality_manager.set_profile(profile_name)
+        silent = bool(data.get("silent", True))
+        controller.set_personality(
+            profile_name,
+            custom_description,
+            custom_wake_word,
+            speak_confirmation=not silent,
+        )
+        global config
+        config = load_config()
         return jsonify({"success": True, "profile": profile_name})
     except Exception as e:
+        logger.error(f"Failed to set personality: {e}")
         return jsonify({"error": str(e)}), 500
 
 

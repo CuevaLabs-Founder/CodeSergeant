@@ -13,6 +13,7 @@
 </div>
 
 ---
+
 ## Showcase
 
 <div align="center">
@@ -55,7 +56,6 @@
 
 ---
 
-
 ## What is Code Sergeant?
 
 Code Sergeant is a macOS menu bar app that monitors your activity during work sessions and gives you real-time feedback when you drift off track. It's like having a (customizable) drill sergeant watching your screen—except this one actually understands context.
@@ -78,7 +78,7 @@ Code Sergeant is what came out: a privacy-first AI companion that actually under
 - **100% local processing** - Your data never leaves your machine
 - **Multiple personalities** - From drill sergeant to supportive buddy
 - **Voice interaction** - Say "Hey Sergeant" to chat hands-free
-- **Native macOS integration** - Lightweight menu bar app using AppKit/Quartz
+- **Native macOS integration** - SwiftUI menu bar app backed by native macOS monitoring APIs
 
 ---
 
@@ -118,7 +118,7 @@ Choose your motivation style:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    SwiftUI Frontend                          │
-│  (Menu Bar App + Dashboard Window)                           │
+│      (Single menu bar window with routed panels)            │
 └────────────────────────┬────────────────────────────────────┘
                          │ HTTP/JSON (Port 5050)
                          │
@@ -174,11 +174,11 @@ pip install -r requirements.txt
 # Download from https://ollama.ai/, then:
 ollama pull llama3.2
 
-# Run Code Sergeant
-python main.py
+# Run the SwiftUI app
+open CodeSergeantUI/CodeSergeantUI.xcodeproj
 ```
 
-The app appears in your menu bar. Click it, set a goal, and start your session.
+Build and run `CodeSergeantUI` in Xcode. The app appears in your menu bar and automatically starts the Python bridge server.
 
 ---
 

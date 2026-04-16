@@ -55,6 +55,37 @@ class TestTTSServiceInit:
 
                     assert service.provider == "elevenlabs"
 
+    def test_elevenlabs_speak_uses_supported_convert_kwargs(self):
+        """Test ElevenLabs speech generation only passes supported SDK kwargs."""
+        with patch("code_sergeant.tts.ELEVENLABS_AVAILABLE", True):
+            with patch("code_sergeant.tts.pyttsx3") as mock_pyttsx3:
+                mock_engine = MagicMock()
+                mock_pyttsx3.init.return_value = mock_engine
+                mock_engine.getProperty.return_value = []
+
+                service = TTSService(
+                    provider="elevenlabs", api_key="test_key", voice_id="test_voice"
+                )
+
+                convert_mock = MagicMock(return_value=[b"audio"])
+                service.client = MagicMock()
+                service.client.text_to_speech.convert = convert_mock
+
+                with patch("code_sergeant.tts.tempfile.NamedTemporaryFile") as mock_tmp:
+                    with patch("code_sergeant.tts.subprocess.Popen") as mock_popen:
+                        tmp_handle = MagicMock()
+                        tmp_handle.__enter__.return_value.name = "/tmp/test.mp3"
+                        mock_tmp.return_value = tmp_handle
+                        mock_popen.return_value.wait.return_value = 0
+
+                        service._speak_elevenlabs("test")
+
+                kwargs = convert_mock.call_args.kwargs
+                assert kwargs["voice_id"] == "test_voice"
+                assert kwargs["text"] == "test"
+                assert "optimize_streaming_latency" in kwargs
+                assert "latency_optimization" not in kwargs
+
 
 @pytest.mark.unit
 class TestTTSServiceQueue:

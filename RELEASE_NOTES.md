@@ -54,7 +54,7 @@ git clone https://github.com/CuevaLabs/CodeSergeant.git
 cd CodeSergeant
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python main.py
+open CodeSergeantUI/CodeSergeantUI.xcodeproj
 ```
 
 For smarter AI, install [Ollama](https://ollama.ai/) and run `ollama pull llama3.2`.

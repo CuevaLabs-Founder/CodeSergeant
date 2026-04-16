@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AppKit
+import AVFoundation
 import Foundation
 
 @main
@@ -15,7 +16,6 @@ struct CodeSergeantApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
-        // Menu Bar Extra (Menu Bar Icon + Dropdown)
         MenuBarExtra {
             MenuBarView()
                 .environmentObject(appState)
@@ -24,22 +24,6 @@ struct CodeSergeantApp: App {
                 .symbolRenderingMode(.hierarchical)
         }
         .menuBarExtraStyle(.window)
-        
-        // Main Dashboard Window
-        WindowGroup("Code Sergeant", id: "dashboard") {
-            DashboardView()
-                .environmentObject(appState)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .defaultPosition(.center)
-        .defaultSize(width: 520, height: 680)
-        
-        // Settings Window
-        Settings {
-            SettingsView()
-                .environmentObject(appState)
-        }
     }
 }
 
@@ -57,8 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up signal handlers for cleanup
         setupSignalHandlers()
         
-        // Start the Python bridge server in background
-        startBridgeServer()
+        requestMicrophoneAccessIfNeeded()
     }
     
     func applicationWillTerminate(_ notification: Notification) {
@@ -168,6 +151,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 print("   source .venv/bin/activate")
                 print("   python bridge/server.py")
             }
+        }
+    }
+
+    private func requestMicrophoneAccessIfNeeded() {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            print("🎙️ Microphone access already granted")
+            startBridgeServer()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        print("🎙️ Microphone access granted")
+                    } else {
+                        print("⚠️ Microphone access denied")
+                    }
+                    self?.startBridgeServer()
+                }
+            }
+        case .denied, .restricted:
+            print("⚠️ Microphone access unavailable")
+            startBridgeServer()
+        @unknown default:
+            startBridgeServer()
         }
     }
     
@@ -345,9 +352,18 @@ enum WarningStatus: String {
     case red = "off_task"       // Off task - trigger strobe
 }
 
+enum MenuPanel {
+    case home
+    case session
+    case settings
+}
+
+@MainActor
 class AppState: ObservableObject {
     @Published var isSessionActive: Bool = false
+    @Published var isStartingSession: Bool = false
     @Published var sessionGoal: String = ""
+    @Published var sessionErrorMessage: String?
     @Published var focusTimeMinutes: Int = 0
     @Published var remainingSeconds: Int = 0
     @Published var isBreak: Bool = false
@@ -372,12 +388,20 @@ class AppState: ObservableObject {
     @Published var ollamaAvailable: Bool = false
     @Published var primaryBackend: String = "none"
     
+    // TTS / ElevenLabs (from /api/tts/status)
+    @Published var ttsProvider: String = "pyttsx3"
+    @Published var elevenLabsKeyConfigured: Bool = false
+    @Published var elevenLabsSdkAvailable: Bool = false
+    
     // Screen Monitoring
     @Published var screenMonitoringEnabled: Bool = false
     @Published var useLocalVision: Bool = true
     @Published var visionBackendStatus: String = "unknown"
+    @Published var menuPanel: MenuPanel = .home
     
     private var statusTimer: Timer?
+    private var pollTick = 0
+    private var previousMenuPanel: MenuPanel = .home
     private let bridgeURL = "http://127.0.0.1:5050"
     
     init() {
@@ -391,42 +415,124 @@ class AppState: ObservableObject {
     // MARK: - API Calls
     
     func startSession() {
+        let trimmedGoal = sessionGoal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedGoal.isEmpty else {
+            sessionErrorMessage = "Enter a goal before starting a session."
+            return
+        }
         guard let url = URL(string: "\(bridgeURL)/api/session/start") else { return }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+
+        isStartingSession = true
+        sessionErrorMessage = nil
+
         let body: [String: Any] = [
-            "goal": sessionGoal,
+            "goal": trimmedGoal,
             "work_minutes": Int(workMinutes),
             "break_minutes": Int(breakMinutes)
         ]
-        
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
+        let bodyData = try? JSONSerialization.data(withJSONObject: body)
+
+        sendStartSessionRequest(url: url, bodyData: bodyData, goal: trimmedGoal, attempt: 0)
+    }
+
+    private func sendStartSessionRequest(url: URL, bodyData: Data?, goal: String, attempt: Int) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = bodyData
+
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            if error == nil {
-                DispatchQueue.main.async {
-                    self?.isSessionActive = true
+            if let error = error as? URLError,
+               attempt == 0,
+               [.cannotConnectToHost, .networkConnectionLost, .timedOut].contains(error.code) {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.75) {
+                    Task { @MainActor [weak self] in
+                        self?.sendStartSessionRequest(url: url, bodyData: bodyData, goal: goal, attempt: attempt + 1)
+                    }
                 }
+                return
+            }
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+
+                if let error = error {
+                    self.isStartingSession = false
+                    self.sessionErrorMessage = "Couldn't reach the Python bridge: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let http = response as? HTTPURLResponse else {
+                    self.isStartingSession = false
+                    self.sessionErrorMessage = "Invalid response from the Python bridge."
+                    return
+                }
+
+                guard (200...299).contains(http.statusCode) else {
+                    self.isStartingSession = false
+                    self.sessionErrorMessage = self.extractErrorMessage(from: data, statusCode: http.statusCode)
+                    return
+                }
+
+                self.isStartingSession = false
+                self.isSessionActive = true
+                self.sessionGoal = goal
+                self.sessionErrorMessage = nil
+                self.showSession()
+                self.fetchStatus()
+                self.fetchTimerStatus()
+                self.fetchXPStatus()
+                self.fetchJudgmentStatus()
             }
         }.resume()
     }
+
+    private func extractErrorMessage(from data: Data?, statusCode: Int) -> String {
+        guard let data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return "Session start failed (HTTP \(statusCode))."
+        }
+
+        if let error = json["error"] as? String, !error.isEmpty {
+            return error
+        }
+
+        if let message = json["message"] as? String, !message.isEmpty {
+            return message
+        }
+
+        return "Session start failed (HTTP \(statusCode))."
+    }
     
     func endSession() {
+        endSession(early: false)
+    }
+    
+    func endSession(early: Bool) {
         guard let url = URL(string: "\(bridgeURL)/api/session/end") else { return }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["early": early])
         
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            if error == nil {
-                DispatchQueue.main.async {
-                    self?.isSessionActive = false
-                    self?.sessionGoal = ""
-                    self?.focusTimeMinutes = 0
-                }
+            guard error == nil else { return }
+            
+            DispatchQueue.main.async {
+                self?.isSessionActive = false
+                self?.sessionGoal = ""
+                self?.focusTimeMinutes = 0
+                self?.remainingSeconds = 0
+                self?.isBreak = false
+                self?.isPaused = false
+                self?.sessionErrorMessage = nil
+                self?.showSession()
+                self?.fetchStatus()
+                self?.fetchTimerStatus()
+                self?.fetchXPStatus()
+                self?.fetchJudgmentStatus()
             }
         }.resume()
     }
@@ -443,17 +549,82 @@ class AppState: ObservableObject {
         sendPOST(endpoint: "/api/session/skip-break")
     }
     
-    func setOpenAIKey(_ key: String) {
-        guard let url = URL(string: "\(bridgeURL)/api/openai-key") else { return }
-        
+    func showHome() {
+        previousMenuPanel = .home
+        menuPanel = .home
+    }
+    
+    func showSession() {
+        previousMenuPanel = .session
+        menuPanel = .session
+    }
+    
+    func showSettings() {
+        if menuPanel != .settings {
+            previousMenuPanel = menuPanel
+        }
+        menuPanel = .settings
+    }
+    
+    func closeSettings() {
+        menuPanel = previousMenuPanel
+    }
+    
+    /// Saves an API key via the bridge; mirrors OpenAI and ElevenLabs endpoints (`api_key` JSON body).
+    func setOpenAIKey(_ key: String, completion: ((Bool, String?) -> Void)? = nil) {
+        postAPIKey(path: "/api/openai-key", key: key) { [weak self] in
+            self?.fetchAIStatus()
+        } completion: { ok, err in
+            completion?(ok, err)
+        }
+    }
+    
+    func setElevenLabsKey(_ key: String, completion: ((Bool, String?) -> Void)? = nil) {
+        postAPIKey(path: "/api/elevenlabs-key", key: key) { [weak self] in
+            self?.fetchTTSStatus()
+        } completion: { ok, err in
+            completion?(ok, err)
+        }
+    }
+    
+    /// Reload TTS status after changing voice or config from Settings (polling also updates this).
+    func refreshTTSStatus() {
+        fetchTTSStatus()
+    }
+    
+    private func postAPIKey(
+        path: String,
+        key: String,
+        onSuccess: @escaping () -> Void,
+        completion: @escaping (Bool, String?) -> Void
+    ) {
+        guard let url = URL(string: "\(bridgeURL)\(path)") else {
+            completion(false, "Invalid URL")
+            return
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["api_key": key])
         
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            if error == nil {
-                self?.fetchAIStatus()
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(false, error.localizedDescription)
+                    return
+                }
+                guard let http = response as? HTTPURLResponse else {
+                    completion(false, "Invalid response")
+                    return
+                }
+                let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                if (200...299).contains(http.statusCode), json?["success"] as? Bool == true {
+                    onSuccess()
+                    completion(true, nil)
+                    return
+                }
+                let message = json?["error"] as? String ?? "Save failed (HTTP \(http.statusCode))"
+                completion(false, message)
             }
         }.resume()
     }
@@ -479,18 +650,42 @@ class AppState: ObservableObject {
     
     private func startStatusPolling() {
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.fetchStatus()
-            self?.fetchTimerStatus()
-            self?.fetchXPStatus()          // NEW: Poll XP status
-            self?.fetchJudgmentStatus()    // NEW: Poll judgment for warning system
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                
+                self.pollTick += 1
+                
+                if self.isSessionActive {
+                    self.fetchStatus()
+                    self.fetchTimerStatus()
+                    self.fetchJudgmentStatus()
+                    
+                    if self.pollTick.isMultiple(of: 5) {
+                        self.fetchXPStatus()
+                    }
+                } else if self.pollTick.isMultiple(of: 5) {
+                    self.fetchStatus()
+                    self.fetchTimerStatus()
+                    self.fetchXPStatus()
+                }
+                
+                if self.pollTick.isMultiple(of: 15) {
+                    self.fetchAIStatus()
+                    self.fetchTTSStatus()
+                    self.fetchScreenMonitoringStatus()
+                }
+            }
         }
+        statusTimer?.tolerance = 0.2
         
         // Initial fetch
         fetchStatus()
+        fetchTimerStatus()
+        fetchXPStatus()
+        fetchJudgmentStatus()
         fetchAIStatus()
+        fetchTTSStatus()
         fetchScreenMonitoringStatus()
-        fetchXPStatus()          // NEW
-        fetchJudgmentStatus()    // NEW
     }
     
     private func fetchStatus() {
@@ -501,10 +696,14 @@ class AppState: ObservableObject {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             
             DispatchQueue.main.async {
-                self?.isSessionActive = json["session_active"] as? Bool ?? false
+                let sessionActive = json["session_active"] as? Bool ?? false
+                self?.isSessionActive = sessionActive
                 self?.focusTimeMinutes = json["focus_time_minutes"] as? Int ?? 0
+                
                 if let goal = json["current_goal"] as? String, !goal.isEmpty {
                     self?.sessionGoal = goal
+                } else if !sessionActive {
+                    self?.sessionGoal = ""
                 }
             }
         }.resume()
@@ -573,6 +772,21 @@ class AppState: ObservableObject {
         }.resume()
     }
     
+    private func fetchTTSStatus() {
+        guard let url = URL(string: "\(bridgeURL)/api/tts/status") else { return }
+        
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            
+            DispatchQueue.main.async {
+                self?.ttsProvider = json["provider"] as? String ?? "pyttsx3"
+                self?.elevenLabsKeyConfigured = json["api_key_set"] as? Bool ?? false
+                self?.elevenLabsSdkAvailable = json["elevenlabs_available"] as? Bool ?? false
+            }
+        }.resume()
+    }
+    
     private func fetchScreenMonitoringStatus() {
         guard let url = URL(string: "\(bridgeURL)/api/screen-monitoring/status") else { return }
         
@@ -597,4 +811,3 @@ class AppState: ObservableObject {
         URLSession.shared.dataTask(with: request).resume()
     }
 }
-

@@ -15,39 +15,38 @@ struct LiquidButton: View {
     let style: ButtonStyle
     let action: () -> Void
     
-    @State private var isPressed = false
     @State private var isHovering = false
     
-    enum ButtonStyle {
-        case primary    // Blue/purple gradient
-        case secondary  // Subtle glass
-        case success    // Green gradient
-        case danger     // Red gradient
-        case ghost      // Transparent with border
+    enum ButtonStyle: Equatable {
+        case primary
+        case secondary
+        case success
+        case danger
+        case ghost
         
         var gradient: LinearGradient {
             switch self {
             case .primary:
                 return LinearGradient(
-                    colors: [Color.blue.opacity(0.9), Color.purple.opacity(0.9)],
+                    colors: [AppTheme.primaryTint, AppTheme.canvasAccent],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
             case .success:
                 return LinearGradient(
-                    colors: [Color.green.opacity(0.9), Color.teal.opacity(0.9)],
+                    colors: [AppTheme.successTint, AppTheme.canvasAccent.opacity(0.95)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
             case .danger:
                 return LinearGradient(
-                    colors: [Color.red.opacity(0.9), Color.orange.opacity(0.9)],
+                    colors: [AppTheme.dangerTint, AppTheme.warningTint],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
             case .secondary, .ghost:
                 return LinearGradient(
-                    colors: [Color.white.opacity(0.1), Color.white.opacity(0.05)],
+                    colors: [Color.white.opacity(0.08), Color.white.opacity(0.03)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -87,99 +86,76 @@ struct LiquidButton: View {
                 Text(title)
                     .font(.system(size: 15, weight: .semibold))
             }
-            .foregroundColor(style.textColor)
+            .foregroundStyle(style.textColor)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
+            .frame(minHeight: AppTheme.controlMinHeight)
             .padding(.horizontal, 20)
-            .background(
-                ZStack {
-                    // Base gradient
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(style.gradient)
-                    
-                    // Glass overlay
-                    if style == .secondary || style == .ghost {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(.ultraThinMaterial)
+            .background {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(style.gradient)
+                    .overlay {
+                        if style == .secondary || style == .ghost {
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(.thinMaterial)
+                        }
                     }
-                    
-                    // Highlight on hover
-                    if isHovering && !isPressed {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(.white.opacity(0.1))
+                    .overlay {
+                        if isHovering {
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(Color.white.opacity(0.08))
+                        }
                     }
-                    
-                    // Press darken
-                    if isPressed {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(.black.opacity(0.2))
-                    }
-                }
-            )
-            // Inner border highlight
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
                     .stroke(
-                        LinearGradient(
-                            colors: [
-                                .white.opacity(style == .ghost ? 0.3 : 0.4),
-                                .white.opacity(0.1),
-                                .clear
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
+                        style == .ghost ? AppTheme.glassStroke : Color.white.opacity(0.14),
                         lineWidth: 1
                     )
-            )
-            // Shadow
+            }
             .shadow(
                 color: shadowColor,
-                radius: isPressed ? 4 : (isHovering ? 12 : 8),
+                radius: isHovering ? 10 : 6,
                 x: 0,
-                y: isPressed ? 2 : (isHovering ? 6 : 4)
+                y: isHovering ? 6 : 3
             )
-            // Press scale
-            .scaleEffect(isPressed ? 0.96 : (isHovering ? 1.02 : 1.0))
-            // Smooth spring animation
-            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isPressed)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
+            .scaleEffect(isHovering ? 1.01 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+            .animation(.spring(response: 0.22, dampingFraction: 0.84), value: isHovering)
         }
         .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .help(title)
         .onHover { hovering in
             isHovering = hovering
         }
-        .pressActions(
-            onPress: { isPressed = true },
-            onRelease: { isPressed = false }
-        )
     }
     
     private var shadowColor: Color {
         switch style {
         case .primary:
-            return .blue.opacity(isHovering ? 0.4 : 0.3)
+            return AppTheme.primaryTint.opacity(0.22)
         case .success:
-            return .green.opacity(isHovering ? 0.4 : 0.3)
+            return AppTheme.successTint.opacity(0.22)
         case .danger:
-            return .red.opacity(isHovering ? 0.4 : 0.3)
+            return AppTheme.dangerTint.opacity(0.2)
         case .secondary, .ghost:
-            return .black.opacity(0.2)
+            return AppTheme.panelShadow
         }
     }
 }
 
-// MARK: - Icon Button
-
 struct LiquidIconButton: View {
+    let title: String
     let icon: String
     let size: CGFloat
     let action: () -> Void
     
-    @State private var isPressed = false
     @State private var isHovering = false
     
-    init(_ icon: String, size: CGFloat = 36, action: @escaping () -> Void) {
+    init(_ title: String, icon: String, size: CGFloat = AppTheme.controlMinHeight, action: @escaping () -> Void) {
+        self.title = title
         self.icon = icon
         self.size = size
         self.action = action
@@ -188,52 +164,41 @@ struct LiquidIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: size * 0.4, weight: .medium))
-                .foregroundColor(.primary)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
                 .frame(width: size, height: size)
-                .background(
+                .background {
                     Circle()
-                        .fill(.ultraThinMaterial)
-                        .overlay(
+                        .fill(.thinMaterial)
+                        .overlay {
                             Circle()
-                                .stroke(.white.opacity(0.2), lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.1), radius: isHovering ? 8 : 4, y: isHovering ? 4 : 2)
-                )
-                .scaleEffect(isPressed ? 0.9 : (isHovering ? 1.1 : 1.0))
-                .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isPressed)
-                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
+                                .stroke(AppTheme.glassStroke, lineWidth: 1)
+                        }
+                        .overlay {
+                            if isHovering {
+                                Circle()
+                                    .fill(Color.white.opacity(0.08))
+                            }
+                        }
+                }
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .frame(width: size, height: size)
+        .contentShape(Circle())
+        .help(title)
+        .accessibilityLabel(Text(title))
+        .shadow(
+            color: AppTheme.panelShadow,
+            radius: isHovering ? 8 : 4,
+            x: 0,
+            y: isHovering ? 4 : 2
+        )
+        .scaleEffect(isHovering ? 1.03 : 1)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
         .onHover { hovering in
             isHovering = hovering
         }
-        .pressActions(
-            onPress: { isPressed = true },
-            onRelease: { isPressed = false }
-        )
-    }
-}
-
-// MARK: - Press Actions Modifier
-
-struct PressActions: ViewModifier {
-    var onPress: () -> Void
-    var onRelease: () -> Void
-    
-    func body(content: Content) -> some View {
-        content
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in onPress() }
-                    .onEnded { _ in onRelease() }
-            )
-    }
-}
-
-extension View {
-    func pressActions(onPress: @escaping () -> Void, onRelease: @escaping () -> Void) -> some View {
-        modifier(PressActions(onPress: onPress, onRelease: onRelease))
     }
 }
 
@@ -252,14 +217,13 @@ extension View {
         LiquidButton("Cancel", style: .ghost) {}
         
         HStack(spacing: 12) {
-            LiquidIconButton("pause.fill") {}
-            LiquidIconButton("play.fill") {}
-            LiquidIconButton("forward.fill") {}
-            LiquidIconButton("gear") {}
+            LiquidIconButton("Pause", icon: "pause.fill") {}
+            LiquidIconButton("Play", icon: "play.fill") {}
+            LiquidIconButton("Skip", icon: "forward.fill") {}
+            LiquidIconButton("Settings", icon: "gear") {}
         }
     }
     .padding(40)
     .frame(width: 400, height: 500)
     .background(GlassBackground())
 }
-

@@ -1,5 +1,4 @@
 # Core dependencies
-rumps; sys_platform == "darwin"  # macOS menu bar library
 requests
 numpy
 python-dateutil

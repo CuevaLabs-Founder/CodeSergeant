@@ -3,13 +3,18 @@ import json
 import logging
 import os
 from pathlib import Path
+
+_DEFAULT_NOTES_FOLDER = str(Path.home() / "Documents" / "CodeSergeant" / "notes")
 from typing import Any, Dict
 
-# Load environment variables from .env file
+# Load .env from project root (parent of this package) so keys work even when cwd
+# is not the repo (e.g. Xcode-launched bridge).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(_ENV_FILE)
 except ImportError:
     # python-dotenv not installed, skip
     pass
@@ -36,7 +41,7 @@ def _scrub_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
     return clean
 
 
-def set_env_var(env_key: str, value: str, env_path: str = ".env") -> None:
+def set_env_var(env_key: str, value: str, env_path: str = str(_ENV_FILE)) -> None:
     """
     Persist an environment variable to .env securely.
 
@@ -103,6 +108,8 @@ DEFAULT_CONFIG = {
         "elevenlabs_api_key": None,  # Stored in .env as ELEVENLABS_API_KEY (never in config.json)
         "voice_id": None,
         "model_id": "eleven_turbo_v2_5",
+        # False = higher-quality ElevenLabs audio; True = lower latency/bitrate (more "phone" sound)
+        "optimize_for_speed": False,
     },
     "personality": {
         "name": "sergeant",
@@ -110,12 +117,16 @@ DEFAULT_CONFIG = {
         "description": "",
         "tone": ["strict", "firm", "commanding"],
     },
-    "voice_activation": {"enabled": False, "sensitivity": 0.5},
+    "voice_activation": {
+        "enabled": False,
+        "sensitivity": 0.5,
+        "input_device_name": None,
+    },
     "pomodoro": {
         "work_duration_minutes": 25,
         "short_break_minutes": 5,
         "long_break_minutes": 15,
-        "auto_start_with_session": False,
+        "auto_start_with_session": True,
         "pomodoros_until_long_break": 4,
     },
     "screen_monitoring": {
@@ -142,6 +153,20 @@ DEFAULT_CONFIG = {
         "check_interval_seconds": 120,
     },
     "motivation": {"enabled": True, "check_interval_minutes": 3},
+    "notes": {
+        # Dedicated wake word that goes straight to note-taking (configurable by user)
+        "wake_word": "take note sergeant",
+        # Seconds of silence (after speech) that ends the recording — expose as slider in Settings
+        "silence_threshold_seconds": 2.0,
+        # Hard timeout in seconds; double-beep fires at timeout - 15s
+        "max_duration_seconds": 60,
+        # Transcripts shorter than this word count are discarded (Whisper hallucination guard)
+        "min_words": 4,
+        # Whether to run an LLM pass over the raw transcript; raw is always preserved
+        "llm_cleanup": False,
+        # Absolute path to the folder where note files are written
+        "notes_folder": _DEFAULT_NOTES_FOLDER,
+    },
 }
 
 

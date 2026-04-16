@@ -59,6 +59,16 @@ actor PythonBridge {
         return try JSONDecoder().decode(ScreenMonitoringStatus.self, from: data)
     }
     
+    func getXPStatus() async throws -> XPStatus {
+        let data = try await get("/api/xp/status")
+        return try JSONDecoder().decode(XPStatus.self, from: data)
+    }
+    
+    func getJudgmentStatus() async throws -> JudgmentStatus {
+        let data = try await get("/api/judgment/current")
+        return try JSONDecoder().decode(JudgmentStatus.self, from: data)
+    }
+    
     // MARK: - Session
     
     func startSession(goal: String, workMinutes: Int, breakMinutes: Int) async throws {
@@ -263,6 +273,7 @@ struct TimerStatus: Codable {
     let remainingSeconds: Int
     let totalSeconds: Int
     let isBreak: Bool
+    let isPaused: Bool
     let workMinutes: Int
     let breakMinutes: Int
     
@@ -271,6 +282,7 @@ struct TimerStatus: Codable {
         case remainingSeconds = "remaining_seconds"
         case totalSeconds = "total_seconds"
         case isBreak = "is_break"
+        case isPaused = "is_paused"
         case workMinutes = "work_minutes"
         case breakMinutes = "break_minutes"
     }
@@ -288,5 +300,31 @@ struct ScreenMonitoringStatus: Codable {
         case backendStatus = "backend_status"
         case checkIntervalSeconds = "check_interval_seconds"
     }
+}
+
+struct XPStatus: Codable {
+    let totalXP: Int
+    let sessionXP: Int
+    let currentRank: String
+    let rankProgress: Double
+    let nextRankName: String
+    let xpToNextRank: Int
+    
+    enum CodingKeys: String, CodingKey {
+        case totalXP = "total_xp"
+        case sessionXP = "session_xp"
+        case currentRank = "current_rank"
+        case rankProgress = "rank_progress"
+        case nextRankName = "next_rank_name"
+        case xpToNextRank = "xp_to_next_rank"
+    }
+}
+
+struct JudgmentStatus: Codable {
+    let classification: String
+    let confidence: Double
+    let reason: String
+    let action: String
+    let say: String
 }
 

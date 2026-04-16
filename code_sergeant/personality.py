@@ -336,6 +336,7 @@ class PersonalityManager:
                 "reminder": "Generate a reminder to take a break or stay hydrated.",
                 "session_start": "Generate an encouraging message to start a focus session.",
                 "session_end": "Generate a summary message for completing a focus session.",
+                "session_quit": "Generate a witty, personality-based remark about the user quitting their session early. Consider their personality, the session duration, number of distractions, and whether they're giving up or just taking a break. Be clever and memorable.",
             }
 
             instruction = phrase_instructions.get(

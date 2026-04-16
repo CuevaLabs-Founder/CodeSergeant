@@ -11,38 +11,46 @@ import SwiftUI
 struct WarningStrobeOverlay: ViewModifier {
     let status: WarningStatus
     @State private var isFlashing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     
     func body(content: Content) -> some View {
         content
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
                     .stroke(strokeColor, lineWidth: strokeWidth)
-                    .opacity(isFlashing ? 1.0 : 0.3)
+                    .opacity(borderOpacity)
                     .animation(
-                        status == .red
+                        shouldFlash
                             ? .easeInOut(duration: 0.5).repeatForever(autoreverses: true)
-                            : .easeInOut(duration: 1.0),
+                            : .easeInOut(duration: 0.2),
                         value: isFlashing
                     )
-            )
-            .onChange(of: status) { newStatus in
-                withAnimation {
-                    isFlashing = newStatus == .red
+            }
+            .overlay(alignment: .topTrailing) {
+                if differentiateWithoutColor {
+                    Image(systemName: statusIcon)
+                        .font(.caption.bold())
+                        .foregroundStyle(strokeColor)
+                        .padding(8)
                 }
             }
+            .onChange(of: status) {
+                isFlashing = shouldFlash
+            }
             .onAppear {
-                isFlashing = status == .red
+                isFlashing = shouldFlash
             }
     }
     
     private var strokeColor: Color {
         switch status {
         case .green:
-            return .green
+            return AppTheme.successTint
         case .yellow:
-            return .yellow
+            return AppTheme.warningTint
         case .red:
-            return .red
+            return AppTheme.dangerTint
         }
     }
     
@@ -54,6 +62,36 @@ struct WarningStrobeOverlay: ViewModifier {
             return 3
         case .red:
             return 4
+        }
+    }
+    
+    private var borderOpacity: Double {
+        if shouldFlash {
+            return isFlashing ? 0.95 : 0.28
+        }
+        
+        switch status {
+        case .green:
+            return 0.45
+        case .yellow:
+            return 0.65
+        case .red:
+            return 0.9
+        }
+    }
+    
+    private var shouldFlash: Bool {
+        status == .red && !reduceMotion
+    }
+    
+    private var statusIcon: String {
+        switch status {
+        case .green:
+            return "checkmark.circle.fill"
+        case .yellow:
+            return "exclamationmark.circle.fill"
+        case .red:
+            return "xmark.circle.fill"
         }
     }
 }
@@ -74,7 +112,7 @@ extension View {
             .font(.system(size: 24, weight: .bold))
             .frame(width: 200, height: 100)
             .background(.ultraThinMaterial)
-            .cornerRadius(12)
+            .clipShape(.rect(cornerRadius: 12))
             .warningStrobe(status: .green)
         
         // Yellow - thinking
@@ -82,7 +120,7 @@ extension View {
             .font(.system(size: 24, weight: .bold))
             .frame(width: 200, height: 100)
             .background(.ultraThinMaterial)
-            .cornerRadius(12)
+            .clipShape(.rect(cornerRadius: 12))
             .warningStrobe(status: .yellow)
         
         // Red - off task (flashing)
@@ -90,7 +128,7 @@ extension View {
             .font(.system(size: 24, weight: .bold))
             .frame(width: 200, height: 100)
             .background(.ultraThinMaterial)
-            .cornerRadius(12)
+            .clipShape(.rect(cornerRadius: 12))
             .warningStrobe(status: .red)
     }
     .padding(40)

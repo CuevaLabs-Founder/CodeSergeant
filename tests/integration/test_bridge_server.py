@@ -94,6 +94,25 @@ class TestStatusEndpoint:
         data = json.loads(response.data)
         assert "session_active" in data
 
+    @patch("bridge.server.controller")
+    def test_status_hides_stale_goal_when_session_is_inactive(self, mock_controller, client):
+        """Inactive sessions should not leak an old goal back to the UI."""
+        mock_state = Mock()
+        mock_state.session_active = False
+        mock_state.goal = "Old goal"
+        mock_state.personality_name = "sergeant"
+        mock_state.stats = Mock()
+        mock_state.stats.focus_seconds = 0
+
+        mock_controller.get_state_snapshot.return_value = mock_state
+
+        response = client.get("/api/status")
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["session_active"] is False
+        assert data["current_goal"] is None
+
 
 @pytest.mark.integration
 class TestSessionEndpoints:
@@ -229,6 +248,65 @@ class TestTTSEndpoints:
             response = client.post("/api/tts/stop")
 
             assert response.status_code == 200
+
+    def test_tts_status(self, client):
+        """Test TTS status returns provider info."""
+        mock_tts = MagicMock()
+        mock_tts.get_status.return_value = {
+            "provider": "elevenlabs",
+            "voice_id": "v1",
+            "model_id": "eleven_turbo_v2_5",
+            "elevenlabs_available": True,
+            "api_key_set": True,
+            "worker_running": True,
+        }
+        with patch("bridge.server.tts_service", mock_tts):
+            response = client.get("/api/tts/status")
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["provider"] == "elevenlabs"
+        assert data["api_key_set"] is True
+
+    def test_set_elevenlabs_key_requires_body(self, client):
+        """Test ElevenLabs key endpoint rejects empty key."""
+        response = client.post(
+            "/api/elevenlabs-key",
+            json={},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+
+    def test_set_elevenlabs_key(self, client):
+        """Test saving ElevenLabs key updates env and TTS service."""
+        mock_tts = MagicMock()
+        with patch("bridge.server.tts_service", mock_tts):
+            with patch("bridge.server.controller", None):
+                with patch("bridge.server.set_env_var") as mock_set_env:
+                    response = client.post(
+                        "/api/elevenlabs-key",
+                        json={"api_key": "test-key-123"},
+                        content_type="application/json",
+                    )
+
+        assert response.status_code == 200
+        mock_set_env.assert_called_once_with("ELEVENLABS_API_KEY", "test-key-123")
+        mock_tts.set_api_key.assert_called_once_with("test-key-123")
+
+    def test_list_tts_voices(self, client):
+        """Test listing TTS voices."""
+        mock_tts = MagicMock()
+        mock_tts.get_available_voices.return_value = [
+            {"id": "v1", "name": "Test", "provider": "elevenlabs"}
+        ]
+        with patch("bridge.server.tts_service", mock_tts):
+            response = client.get("/api/tts/voices")
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert len(data["voices"]) == 1
+        assert data["voices"][0]["id"] == "v1"
 
 
 @pytest.mark.integration

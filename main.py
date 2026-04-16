@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main entry point for Code Sergeant."""
+"""Main entry point for Code Sergeant - Bridge Server Mode."""
 import sys
 import os
 
@@ -16,20 +16,19 @@ if os.path.exists(venv_python) and sys.executable != venv_python:
     print()
 
 from code_sergeant.logging_utils import setup_logging
-from code_sergeant.menu_bar import CodeSergeantApp
 
 def main():
-    """Launch Code Sergeant menu bar app."""
+    """Launch Code Sergeant bridge server for SwiftUI frontend."""
     # Set up logging
     logger = setup_logging()
-    logger.info("Starting Code Sergeant")
+    logger.info("Starting Code Sergeant Bridge Server")
     
     try:
-        # Create and run app
-        app = CodeSergeantApp()
-        app.run()
+        # Import and start bridge server
+        from bridge.server import main as bridge_main
+        bridge_main()
     except KeyboardInterrupt:
-        logger.info("Interrupted by user")
+        logger.info("Bridge server interrupted by user")
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)

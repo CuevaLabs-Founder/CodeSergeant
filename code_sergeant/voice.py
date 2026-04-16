@@ -10,9 +10,143 @@ from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 import ollama
 import sounddevice as sd
-from faster_whisper import WhisperModel
 
+try:
+    import whisper
+except ImportError:
+    whisper = None
+try:
+    from faster_whisper import WhisperModel
+except ImportError:
+    WhisperModel = None
 logger = logging.getLogger("code_sergeant.voice")
+
+
+def list_input_devices() -> List[Dict[str, Any]]:
+    """Return available PortAudio input devices."""
+    try:
+        devices = sd.query_devices()
+    except Exception as e:
+        logger.warning(f"Failed to enumerate audio devices: {e}")
+        return []
+
+    default_input_index = None
+    try:
+        default_device = sd.default.device
+        if isinstance(default_device, (list, tuple)) and len(default_device) >= 1:
+            candidate = default_device[0]
+            if isinstance(candidate, int) and candidate >= 0:
+                default_input_index = candidate
+    except Exception:
+        pass
+
+    input_devices: List[Dict[str, Any]] = []
+    for index, device in enumerate(devices):
+        max_input_channels = int(device.get("max_input_channels", 0) or 0)
+        if max_input_channels <= 0:
+            continue
+        input_devices.append(
+            {
+                "index": index,
+                "name": device.get("name", f"Input {index}"),
+                "max_input_channels": max_input_channels,
+                "default_samplerate": device.get("default_samplerate"),
+                "is_default": index == default_input_index,
+            }
+        )
+
+    return input_devices
+
+
+def resolve_input_device(
+    selected_device_name: Optional[str],
+) -> tuple[Optional[int], Optional[Dict[str, Any]]]:
+    """Resolve a configured input-device name to a live PortAudio device."""
+    devices = list_input_devices()
+
+    if selected_device_name:
+        for device in devices:
+            if device["name"] == selected_device_name:
+                return int(device["index"]), device
+        logger.warning(
+            f"Configured input device not found: {selected_device_name}. Falling back to default input."
+        )
+
+    for device in devices:
+        if device.get("is_default"):
+            return int(device["index"]), device
+
+    return None, None
+
+
+def get_input_device_recording_kwargs(
+    selected_device_name: Optional[str],
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Build `sounddevice.rec()` kwargs for the selected input device."""
+    device_index, device_info = resolve_input_device(selected_device_name)
+    if device_index is None:
+        return {}, None
+    return {"device": device_index}, device_info
+
+
+class WhisperBackend:
+    """Small adapter over whisper/openai-whisper and faster-whisper."""
+
+    def __init__(self, backend: str, model: Any):
+        self.backend = backend
+        self.model = model
+
+    def transcribe(
+        self,
+        audio_data: np.ndarray,
+        language: str = "en",
+        beam_size: int = 5,
+        vad_filter: bool = True,
+        vad_parameters: Optional[Dict[str, Any]] = None,
+    ):
+        if self.backend == "whisper":
+            result = self.model.transcribe(
+                audio_data,
+                language=language,
+                fp16=False,
+            )
+            text = (result.get("text") or "").strip()
+            segments = []
+            if text:
+                segments = [type("Seg", (), {"text": text, "start": 0.0, "end": 0.0})()]
+            return segments, {}
+
+        return self.model.transcribe(
+            audio_data,
+            language=language,
+            beam_size=beam_size,
+            vad_filter=vad_filter,
+            vad_parameters=vad_parameters or {},
+        )
+
+
+def load_whisper_backend(model_size: str, purpose: str) -> Optional[WhisperBackend]:
+    """Load any supported local speech model backend."""
+    if WhisperModel is not None:
+        try:
+            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            logger.info(f"{purpose}: faster-whisper {model_size} model loaded")
+            return WhisperBackend("faster_whisper", model)
+        except Exception as e:
+            logger.error(f"Failed to load faster-whisper {model_size} model: {e}")
+
+    if whisper is not None:
+        try:
+            model = whisper.load_model(model_size, device="cpu")
+            logger.info(f"{purpose}: whisper {model_size} model loaded")
+            return WhisperBackend("whisper", model)
+        except Exception as e:
+            logger.error(f"Failed to load whisper {model_size} model: {e}")
+
+    logger.warning(
+        f"{purpose}: no speech model backend available; install faster-whisper or whisper"
+    )
+    return None
 
 
 # Voice command patterns
@@ -107,22 +241,14 @@ class VoiceCommand:
 class WakeWordDetector:
     """Detects wake words using continuous audio streaming and Whisper."""
 
-    # Special command phrases that can follow wake words
-    NOTE_TAKING_PHRASES = [
-        "take a note",
-        "take note",
-        "make a note",
-        "note this",
-        "remember this",
-        "save this",
-    ]
-
     def __init__(
         self,
         wake_words: List[str],
+        note_wake_words: Optional[List[str]] = None,
         sample_rate: int = 16000,
         chunk_duration: float = 2.0,
         sensitivity: float = 0.5,
+        input_device_name: Optional[str] = None,
         on_wake_word: Optional[Callable[[str], None]] = None,
         on_note_taking: Optional[Callable[[str], None]] = None,
     ):
@@ -130,54 +256,89 @@ class WakeWordDetector:
         Initialize wake word detector.
 
         Args:
-            wake_words: List of wake words to detect (e.g., ["hey sergeant", "hey buddy"])
-            sample_rate: Audio sample rate
-            chunk_duration: Duration of each audio chunk in seconds
-            sensitivity: Detection sensitivity (0.0-1.0)
-            on_wake_word: Callback when wake word detected
-            on_note_taking: Callback when "hey [personality] take a note" detected
+            wake_words: Wake words for general voice interaction (e.g., ["hey sergeant"]).
+            note_wake_words: Dedicated wake words that go straight to note-taking
+                (e.g., ["take note sergeant"]). Checked before wake_words so a user
+                can have overlapping phrases without ambiguity.
+            sample_rate: Audio sample rate.
+            chunk_duration: Duration of each audio chunk in seconds.
+            sensitivity: Detection sensitivity (0.0-1.0).
+            on_wake_word: Callback when a general wake word is detected.
+            on_note_taking: Callback when a note wake word is detected.
         """
         self.wake_words = [w.lower() for w in wake_words]
+        self.note_wake_words = [w.lower() for w in (note_wake_words or [])]
         self.sample_rate = sample_rate
         self.chunk_duration = chunk_duration
         self.sensitivity = sensitivity
+        self.input_device_name = input_device_name
         self.on_wake_word = on_wake_word
         self.on_note_taking = on_note_taking
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._recording_kwargs: Dict[str, Any] = {}
 
-        # Initialize Whisper model (tiny for speed in wake word detection)
-        try:
-            self.whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
-            logger.info("Wake word detector: Whisper tiny model loaded")
-        except Exception as e:
-            logger.error(f"Failed to load Whisper model for wake word detection: {e}")
-            self.whisper_model = None
+        # Initialize speech model (tiny for speed in wake word detection)
+        self.whisper_model = load_whisper_backend("tiny", "Wake word detector")
+
+    @property
+    def is_available(self) -> bool:
+        return self.whisper_model is not None
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
 
     def set_wake_words(self, wake_words: List[str]):
-        """Update wake words."""
+        """Update general wake words."""
         self.wake_words = [w.lower() for w in wake_words]
         logger.info(f"Wake words updated: {self.wake_words}")
 
-    def start(self):
+    def set_note_wake_words(self, note_wake_words: List[str]):
+        """Update the dedicated note-taking wake words."""
+        self.note_wake_words = [w.lower() for w in note_wake_words]
+        logger.info(f"Note wake words updated: {self.note_wake_words}")
+
+    def set_input_device(self, input_device_name: Optional[str]):
+        """Update the configured input device."""
+        self.input_device_name = input_device_name
+
+    def start(self) -> bool:
         """Start wake word detection in background thread."""
         if self._running:
             logger.warning("Wake word detector already running")
-            return
+            return True
 
         if not self.whisper_model:
             logger.error(
                 "Cannot start wake word detection: Whisper model not available"
             )
-            return
+            return False
+
+        self._recording_kwargs, device_info = get_input_device_recording_kwargs(
+            self.input_device_name
+        )
+        if device_info:
+            logger.info(f"Wake word detector using input device: {device_info['name']}")
+        elif self.input_device_name:
+            logger.warning(
+                "Wake word detector could not resolve the configured microphone; "
+                "PortAudio default input will be used if available"
+            )
+        else:
+            logger.info("Wake word detector using the system default input device")
 
         self._stop_event.clear()
         self._running = True
         self._thread = threading.Thread(target=self._detection_loop, daemon=True)
         self._thread.start()
-        logger.info(f"Wake word detection started. Listening for: {self.wake_words}")
+        logger.info(
+            f"Wake word detection started. "
+            f"Commands: {self.wake_words}  Notes: {self.note_wake_words}"
+        )
+        return True
 
     def stop(self):
         """Stop wake word detection."""
@@ -200,12 +361,12 @@ class WakeWordDetector:
 
         while not self._stop_event.is_set():
             try:
-                # Record audio chunk
                 audio_data = sd.rec(
                     chunk_samples,
                     samplerate=self.sample_rate,
                     channels=1,
                     dtype=np.float32,
+                    **self._recording_kwargs,
                 )
                 sd.wait()
 
@@ -214,47 +375,43 @@ class WakeWordDetector:
 
                 audio_data = audio_data.flatten()
 
-                # Check audio level (skip if too quiet)
-                # Lower threshold to catch quieter speech
-                audio_level = np.abs(audio_data).max()
-                if audio_level < 0.01:  # Lowered threshold for better detection
+                # Skip chunks that are too quiet to contain speech
+                if np.abs(audio_data).max() < 0.01:
                     continue
 
-                # Transcribe
                 segments, _ = self.whisper_model.transcribe(
                     audio_data,
                     language="en",
-                    beam_size=1,  # Fast decoding
+                    beam_size=1,
                     vad_filter=True,
                 )
 
                 transcript = " ".join(seg.text for seg in segments).lower().strip()
-
                 if not transcript:
                     continue
 
                 logger.debug(f"Wake word check: '{transcript}'")
 
-                # Check for wake words
-                for wake_word in self.wake_words:
-                    # Use fuzzy matching with sensitivity
-                    if self._matches_wake_word(transcript, wake_word):
-                        logger.info(
-                            f"Wake word detected: '{wake_word}' in '{transcript}'"
-                        )
-
-                        # Check if this is a note-taking command (e.g., "hey sergeant take a note")
-                        is_note_taking = self._is_note_taking_command(transcript)
-
-                        if is_note_taking and self.on_note_taking:
-                            logger.info(f"Note-taking command detected: '{transcript}'")
-                            self.on_note_taking(wake_word)
-                        elif self.on_wake_word:
-                            self.on_wake_word(wake_word)
-
-                        # Brief pause after detection to avoid rapid triggers
+                # Note wake words are checked first — they take priority over
+                # general wake words so there's no ambiguity between the two.
+                matched = False
+                for note_ww in self.note_wake_words:
+                    if self._matches_wake_word(transcript, note_ww):
+                        logger.info(f"Note wake word '{note_ww}' in '{transcript}'")
+                        if self.on_note_taking:
+                            self.on_note_taking(note_ww)
                         time.sleep(1.0)
+                        matched = True
                         break
+
+                if not matched:
+                    for wake_word in self.wake_words:
+                        if self._matches_wake_word(transcript, wake_word):
+                            logger.info(f"Wake word '{wake_word}' in '{transcript}'")
+                            if self.on_wake_word:
+                                self.on_wake_word(wake_word)
+                            time.sleep(1.0)
+                            break
 
             except sd.PortAudioError as e:
                 logger.error(f"Audio error in wake word detection: {e}")
@@ -397,24 +554,6 @@ class WakeWordDetector:
 
         return variations
 
-    def _is_note_taking_command(self, transcript: str) -> bool:
-        """
-        Check if transcript contains a note-taking command after the wake word.
-
-        Args:
-            transcript: Full transcript text
-
-        Returns:
-            True if note-taking phrase found
-        """
-        transcript_lower = transcript.lower()
-
-        for phrase in self.NOTE_TAKING_PHRASES:
-            if phrase in transcript_lower:
-                return True
-
-        return False
-
 
 class VoiceCommandParser:
     """Parses voice input into commands."""
@@ -538,6 +677,7 @@ class VoiceWorker:
         sample_rate: int = 16000,
         ollama_model: str = "llama3.2",
         ollama_base_url: str = "http://localhost:11434",
+        input_device_name: Optional[str] = None,
         tts_service=None,
         personality_manager=None,
     ):
@@ -555,6 +695,7 @@ class VoiceWorker:
         self.record_seconds = record_seconds
         self.sample_rate = sample_rate
         self.ollama_model = ollama_model
+        self.input_device_name = input_device_name
         self.ollama_client = ollama.Client(host=ollama_base_url)
         self.tts_service = tts_service
         self.personality_manager = personality_manager
@@ -562,149 +703,29 @@ class VoiceWorker:
         # Command parser
         self.command_parser = VoiceCommandParser(ollama_model, ollama_base_url)
 
-        # Initialize Whisper model (base model for accuracy)
-        try:
-            self.whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-            logger.info("Whisper model loaded")
-        except Exception as e:
-            logger.error(f"Failed to load Whisper model: {e}")
-            self.whisper_model = None
+        # Initialize speech model (base model for accuracy)
+        self.whisper_model = load_whisper_backend("base", "Voice worker")
 
-    # Stop phrases for ending note-taking
-    NOTE_STOP_PHRASES = [
-        "end note",
-        "and note",  # Common Whisper mishearing of "end note"
-        "in note",  # Another mishearing
-        "stop note",
-        "stop taking note",
-        "stop taking notes",
-        "done taking note",
-        "done taking notes",
-        "done with note",
-        "that's all",
-        "that's it",
-        "finish note",
-        "save note",
-        "save it",
-    ]
+    def set_input_device(self, input_device_name: Optional[str]) -> None:
+        """Update the configured input device."""
+        self.input_device_name = input_device_name
 
-    # TTS prompt phrases to filter from the start of recordings
-    TTS_PROMPT_PHRASES = [
-        "when you're done",
-        "when you are done",
-        "go ahead",
-        "say end note",
-        "say 'end note'",
-    ]
-
-    def record_note(self, max_duration: float = 120.0) -> Optional[str]:
-        """
-        Record a note until user says a stop phrase (e.g., "end note").
-
-        Records in chunks, transcribing periodically to check for stop phrases.
-        Continues until stop phrase detected or max duration reached.
-
-        Args:
-            max_duration: Maximum recording duration in seconds (default 2 minutes)
-
-        Returns:
-            Transcript text (without stop phrase), or None if recording/transcription failed
-        """
-        try:
-            default_input = sd.query_devices(kind="input")
-            logger.info(f"Using input device: {default_input['name']}")
-
-            all_audio_chunks = []
-            chunk_duration = 5.0  # Record in 5-second chunks for transcription checks
-            chunk_samples = int(chunk_duration * self.sample_rate)
-            max_samples = int(max_duration * self.sample_rate)
-            total_samples = 0
-
-            logger.info(
-                f"Recording note (max {max_duration}s). Say 'end note' or 'stop taking note' when done."
-            )
-
-            while total_samples < max_samples:
-                # Record chunk
-                chunk = sd.rec(
-                    chunk_samples,
-                    samplerate=self.sample_rate,
-                    channels=1,
-                    dtype=np.float32,
-                )
-                sd.wait()
-
-                chunk = chunk.flatten()
-                all_audio_chunks.append(chunk)
-                total_samples += len(chunk)
-
-                # Transcribe this chunk to check for stop phrase
-                try:
-                    chunk_transcript = self._transcribe(chunk)
-                    if chunk_transcript:
-                        chunk_lower = chunk_transcript.lower()
-                        logger.debug(f"Note chunk: '{chunk_transcript}'")
-
-                        # Check for stop phrases
-                        for stop_phrase in self.NOTE_STOP_PHRASES:
-                            if stop_phrase in chunk_lower:
-                                logger.info(f"Stop phrase detected: '{stop_phrase}'")
-                                # Combine all audio and transcribe the full recording
-                                full_audio = np.concatenate(all_audio_chunks)
-                                full_transcript = self._transcribe(full_audio)
-
-                                if full_transcript:
-                                    # Remove the stop phrase from the transcript
-                                    cleaned = self._remove_stop_phrases(full_transcript)
-                                    logger.info(f"Note transcribed: {cleaned[:100]}...")
-                                    return cleaned
-                                return None
-                except Exception as e:
-                    logger.warning(f"Chunk transcription failed: {e}")
-                    # Continue recording even if chunk transcription fails
-
-            # Max duration reached - transcribe everything
-            logger.info("Max duration reached, finalizing note...")
-            full_audio = np.concatenate(all_audio_chunks)
-            full_transcript = self._transcribe(full_audio)
-
-            if full_transcript:
-                cleaned = self._remove_stop_phrases(full_transcript)
-                logger.info(f"Note transcribed: {cleaned[:100]}...")
-                return cleaned
-            return None
-
-        except sd.PortAudioError as e:
-            logger.error(f"PortAudio error (mic permission?): {e}")
-            self._handle_mic_error(e)
-            return None
-        except Exception as e:
-            logger.error(f"Note recording error: {e}")
-            return None
-
-    def _remove_stop_phrases(self, transcript: str) -> str:
-        """Remove stop phrases from the end and TTS prompts from the start of a transcript."""
-        result = transcript.strip()
-
-        # Remove TTS prompt phrases from the beginning (mic picked up the TTS)
-        for prompt_phrase in self.TTS_PROMPT_PHRASES:
-            pattern = rf"^[\s.,!?]*{re.escape(prompt_phrase)}[\s.,!?]*"
-            result = re.sub(pattern, "", result, flags=re.IGNORECASE)
-
-        # Also remove common partial TTS bleed-through patterns
-        result = re.sub(
-            r"^[\s.,!?]*(what|when)\s+you\'?r?e?\s+done[\s.,!?]*",
-            "",
-            result,
-            flags=re.IGNORECASE,
+    def _get_recording_kwargs(
+        self, purpose: str
+    ) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        """Resolve the active input device for a recording operation."""
+        recording_kwargs, device_info = get_input_device_recording_kwargs(
+            self.input_device_name
         )
-
-        # Remove stop phrases from the end
-        for stop_phrase in self.NOTE_STOP_PHRASES:
-            pattern = rf"\s*{re.escape(stop_phrase)}[\s.,!?]*$"
-            result = re.sub(pattern, "", result, flags=re.IGNORECASE)
-
-        return result.strip()
+        if device_info:
+            logger.info(f"{purpose}: using input device: {device_info['name']}")
+        elif self.input_device_name:
+            logger.warning(
+                f"{purpose}: configured microphone '{self.input_device_name}' was not found"
+            )
+        else:
+            logger.info(f"{purpose}: using the system default input device")
+        return recording_kwargs, device_info
 
     def record_and_process(
         self,
@@ -780,11 +801,10 @@ class VoiceWorker:
             Audio data as numpy array, or None on error
         """
         try:
+            recording_kwargs, _ = self._get_recording_kwargs("Voice recording")
             # List available devices for debugging
             devices = sd.query_devices()
-            default_input = sd.query_devices(kind="input")
             logger.debug(f"Available audio devices: {len(devices)}")
-            logger.info(f"Using input device: {default_input['name']}")
 
             # Record audio
             audio_data = sd.rec(
@@ -792,6 +812,7 @@ class VoiceWorker:
                 samplerate=self.sample_rate,
                 channels=1,
                 dtype=np.float32,
+                **recording_kwargs,
             )
             sd.wait()  # Wait until recording is finished
 
@@ -818,98 +839,6 @@ class VoiceWorker:
             return None
         except Exception as e:
             logger.error(f"Recording error: {e}")
-            return None
-
-    def _record_audio_with_vad(
-        self,
-        max_duration: float = 15.0,
-        silence_threshold: float = 0.02,
-        silence_duration: float = 1.5,
-        chunk_duration: float = 0.5,
-    ) -> Optional[np.ndarray]:
-        """
-        Record audio with voice activity detection.
-
-        Records until silence is detected (after speech) or max duration reached.
-
-        Args:
-            max_duration: Maximum recording duration in seconds
-            silence_threshold: RMS threshold for silence detection
-            silence_duration: Duration of silence to trigger stop
-            chunk_duration: Duration of each recording chunk
-
-        Returns:
-            Audio data as numpy array, or None on error
-        """
-        try:
-            default_input = sd.query_devices(kind="input")
-            logger.info(f"Using input device: {default_input['name']}")
-
-            chunks = []
-            chunk_samples = int(chunk_duration * self.sample_rate)
-            max_samples = int(max_duration * self.sample_rate)
-            silence_samples = int(silence_duration * self.sample_rate)
-
-            total_samples = 0
-            consecutive_silence_samples = 0
-            speech_detected = False
-
-            logger.info(
-                f"Recording with VAD (max {max_duration}s, silence threshold: {silence_threshold})"
-            )
-
-            while total_samples < max_samples:
-                # Record chunk
-                chunk = sd.rec(
-                    chunk_samples,
-                    samplerate=self.sample_rate,
-                    channels=1,
-                    dtype=np.float32,
-                )
-                sd.wait()
-
-                chunk = chunk.flatten()
-                chunks.append(chunk)
-                total_samples += len(chunk)
-
-                # Calculate RMS for this chunk
-                chunk_rms = np.sqrt(np.mean(chunk**2))
-
-                if chunk_rms > silence_threshold:
-                    # Speech detected
-                    speech_detected = True
-                    consecutive_silence_samples = 0
-                else:
-                    # Silence
-                    if speech_detected:
-                        consecutive_silence_samples += len(chunk)
-
-                        # Check if we've had enough silence after speech
-                        if consecutive_silence_samples >= silence_samples:
-                            logger.info(
-                                f"VAD: Silence detected after speech, stopping recording"
-                            )
-                            break
-
-            # Combine all chunks
-            audio_data = np.concatenate(chunks)
-
-            audio_level = np.abs(audio_data).max()
-            audio_rms = np.sqrt(np.mean(audio_data**2))
-            logger.info(
-                f"VAD recorded {len(audio_data)} samples "
-                f"({len(audio_data)/self.sample_rate:.1f}s), "
-                f"peak: {audio_level:.4f}, RMS: {audio_rms:.4f}"
-            )
-
-            return audio_data
-
-        except sd.PortAudioError as e:
-            logger.error(f"PortAudio error (mic permission?): {e}")
-            self._handle_mic_error(e)
-            return None
-        except Exception as e:
-            logger.error(f"VAD recording error: {e}")
             return None
 
     def _transcribe(self, audio_data: np.ndarray) -> Optional[str]:

@@ -26,8 +26,9 @@
 	<string>NSApplication</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Code Sergeant uses your microphone for wake word detection, push-to-talk, and voice notes.</string>
 	<key>LSUIElement</key>
 	<true/>
 </dict>
 </plist>
-

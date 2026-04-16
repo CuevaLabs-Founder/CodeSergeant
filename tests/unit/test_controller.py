@@ -22,7 +22,9 @@ sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
+from code_sergeant.controller import AppController, ControllerState  # noqa: E402
 from code_sergeant.models import ActivityEvent, Judgment, SessionStats  # noqa: E402
+from tests.conftest import MockTTSService  # noqa: E402
 
 
 @pytest.mark.unit
@@ -248,6 +250,58 @@ class TestCooldownLogic:
 
         # Cooldown should have expired
         assert time.time() - last_yell_time > cooldown_seconds
+
+
+@pytest.mark.unit
+class TestControllerSessionEnd:
+    """Regression tests for session teardown."""
+
+    @patch("code_sergeant.controller.write_session_log", return_value="session-log.json")
+    def test_end_session_still_clears_state_when_quit_message_is_duplicate(self, _mock_write_log):
+        """Ending a session must not bail out before clearing active state."""
+        controller = AppController.__new__(AppController)
+        controller.state = ControllerState(
+            session_active=True,
+            goal="Ship onboarding flow",
+            stats=SessionStats(
+                start_time=datetime.now(),
+                focus_seconds=900,
+                distractions_count=1,
+            ),
+        )
+        controller.state.last_judgment_obj = None
+        controller.stop_event = threading.Event()
+        controller.workers = {}
+        controller.tts_service = MockTTSService()
+        controller.wake_word_detector = None
+        controller.pomodoro = Mock()
+        controller.pomodoro.state = Mock(pomodoros_completed=2)
+        controller.motivation_monitor = Mock()
+        controller.screen_monitor = Mock()
+        controller.xp_manager = Mock()
+        controller.xp_manager.state = Mock(session_xp=12, total_xp=120, current_rank="Private")
+        controller.xp_manager.deduct_xp_for_early_end.return_value = 6
+        controller.personality_manager = Mock()
+        controller.personality_manager.get_phrase.return_value = "Wrap it up."
+        controller.config = {}
+        controller.current_activity = None
+        controller.activity_history = []
+        controller.last_judgment = None
+        controller.last_yell_time = None
+        controller._preloaded_responses = {}
+        controller._last_quit_session_key = "15_1_True"
+        controller._stop_drill_worker = Mock()
+
+        summary = controller.end_session(early=True)
+
+        assert summary["focus_minutes"] == 15
+        assert summary["xp_penalty"] == 6
+        assert controller.state.session_active is False
+        assert controller.state.goal is None
+        assert controller.state.stats.focus_seconds == 0
+        controller.pomodoro.stop.assert_called_once()
+        controller.motivation_monitor.stop.assert_called_once()
+        controller.screen_monitor.stop.assert_called_once()
 
 
 @pytest.mark.unit

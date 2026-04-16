@@ -7,43 +7,6 @@
     600,
     900
   ],
-  "xp": {
-    "enabled": true,
-    "xp_per_minute": 1,
-    "early_end_penalty_percent": 50,
-    "ranks": [
-      {
-        "name": "Recruit",
-        "xp_threshold": 0,
-        "icon": "🎖️"
-      },
-      {
-        "name": "Private",
-        "xp_threshold": 100,
-        "icon": "⭐"
-      },
-      {
-        "name": "Corporal",
-        "xp_threshold": 300,
-        "icon": "⭐⭐"
-      },
-      {
-        "name": "Sergeant",
-        "xp_threshold": 600,
-        "icon": "⭐⭐⭐"
-      },
-      {
-        "name": "Staff Sergeant",
-        "xp_threshold": 1000,
-        "icon": "🎖️⭐"
-      },
-      {
-        "name": "Captain",
-        "xp_threshold": 1500,
-        "icon": "🎖️⭐⭐"
-      }
-    ]
-  },
   "voice": {
     "record_seconds": 5,
     "sample_rate": 16000,
@@ -63,7 +26,8 @@
     "volume": 1.0,
     "elevenlabs_api_key": null,
     "voice_id": "DGzg6RaUqxGRTHSBjfgF",
-    "model_id": "eleven_turbo_v2_5"
+    "model_id": "eleven_turbo_v2_5",
+    "optimize_for_speed": false
   },
   "personality": {
     "name": "sergeant",
@@ -78,17 +42,18 @@
   },
   "voice_activation": {
     "enabled": true,
-    "sensitivity": 0.5
+    "sensitivity": 0.5,
+    "input_device_name": null
   },
   "pomodoro": {
     "work_duration_minutes": 25,
     "short_break_minutes": 5,
     "long_break_minutes": 15,
-    "auto_start_with_session": false,
+    "auto_start_with_session": true,
     "pomodoros_until_long_break": 4
   },
   "screen_monitoring": {
-    "enabled": true,
+    "enabled": false,
     "app_blocklist": [
       "1Password",
       "Keychain Access",
@@ -113,5 +78,50 @@
   "motivation": {
     "enabled": true,
     "check_interval_minutes": 3
+  },
+  "notes": {
+    "wake_word": "take note sergeant",
+    "silence_threshold_seconds": 2.0,
+    "max_duration_seconds": 60,
+    "min_words": 4,
+    "llm_cleanup": false,
+    "notes_folder": "~/Documents/CodeSergeant/notes"
+  },
+  "xp": {
+    "enabled": true,
+    "xp_per_minute": 5,
+    "early_end_penalty_percent": 70,
+    "ranks": [
+      {
+        "name": "Recruit",
+        "xp_threshold": 0,
+        "icon": "\ud83c\udf96\ufe0f"
+      },
+      {
+        "name": "Private",
+        "xp_threshold": 100,
+        "icon": "\u2b50"
+      },
+      {
+        "name": "Corporal",
+        "xp_threshold": 300,
+        "icon": "\u2b50\u2b50"
+      },
+      {
+        "name": "Sergeant",
+        "xp_threshold": 600,
+        "icon": "\u2b50\u2b50\u2b50"
+      },
+      {
+        "name": "Staff Sergeant",
+        "xp_threshold": 1000,
+        "icon": "\ud83c\udf96\ufe0f\u2b50"
+      },
+      {
+        "name": "Captain",
+        "xp_threshold": 1500,
+        "icon": "\ud83c\udf96\ufe0f\u2b50\u2b50"
+      }
+    ]
   }
 }

@@ -90,18 +90,18 @@ ELEVENLABS_API_KEY=your-key-here
 ## Step 4: Run Code Sergeant
 
 ```bash
-python3 main.py
+open CodeSergeantUI/CodeSergeantUI.xcodeproj
 ```
 
-The app will:
-- Appear in your menu bar with a sword icon
-- Auto-generate `config.json` on first run
-- Start monitoring using native macOS APIs
+Build and run the `CodeSergeantUI` target in Xcode. The app will:
+- Appear in your menu bar with a shield icon
+- Start the Python bridge server automatically
+- Start monitoring using native macOS APIs once you begin a session
 
 ## Start Your First Session
 
 1. Click the menu bar icon
-2. Select "Start Session"
+2. Select "Start Focus Session"
 3. Enter your focus goal (e.g., "Build the login feature")
 4. Code Sergeant monitors your activity and keeps you on track
 

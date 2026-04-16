@@ -6,8 +6,8 @@ A modern SwiftUI menu bar app with **liquid glass design** for macOS Sonoma/Sequ
 
 - **Liquid Glass Design** - Frosted glass backgrounds, smooth animations, depth effects
 - **Menu Bar App** - Lives in the menu bar, no dock icon
-- **Full Dashboard** - Goal input, timer settings, session tracking
-- **Settings Panel** - AI configuration, screen monitoring, privacy controls
+- **Expanded Session View** - Goal input, timer settings, and session tracking inside the menu bar window
+- **Integrated Settings** - AI configuration, screen monitoring, and privacy controls in the same menu bar UI
 - **Python Backend Bridge** - Communicates with Python services via HTTP
 
 ## Requirements
@@ -38,7 +38,7 @@ swift run CodeSergeantUI
 CodeSergeantUI/
 ├── CodeSergeantApp.swift      # Main app entry point
 ├── Views/
-│   ├── DashboardView.swift    # Main dashboard window
+│   ├── DashboardView.swift    # Expanded session view in the menu bar
 │   ├── MenuBarView.swift      # Menu bar dropdown
 │   ├── SettingsView.swift     # Settings tabs
 │   └── Components/
@@ -66,7 +66,7 @@ Text("Content")
 
 ### Liquid Button
 ```swift
-LiquidButton("Start Session", icon: "play.fill", style: .primary) {
+LiquidButton("Start Focus Session", icon: "play.fill", style: .primary) {
     // Action
 }
 ```
@@ -111,5 +111,4 @@ API endpoints:
 
 ## License
 
-MIT
-
+AGPL-3.0

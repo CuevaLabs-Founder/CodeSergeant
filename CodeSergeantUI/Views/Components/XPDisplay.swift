@@ -29,7 +29,6 @@ struct XPDisplay: View {
     
     private var compactView: some View {
         HStack(spacing: 8) {
-            // Rank badge
             Text(rankAbbreviation)
                 .font(.system(size: 10, weight: .black, design: .monospaced))
                 .tracking(1)
@@ -63,7 +62,7 @@ struct XPDisplay: View {
             if sessionXP > 0 {
                 Text("+\(sessionXP)")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(AppTheme.successTint)
                     .transition(.scale.combined(with: .opacity))
                     .animation(.spring(response: 0.3), value: sessionXP)
             }
@@ -76,12 +75,11 @@ struct XPDisplay: View {
     // MARK: - Full View (Dashboard)
     
     private var fullView: some View {
-        VStack(spacing: 12) {
-            // Rank badge - large
+        HStack(alignment: .center, spacing: 14) {
             VStack(spacing: 4) {
                 Text(currentRank.uppercased())
-                    .font(.system(size: 18, weight: .black, design: .monospaced))
-                    .tracking(2)
+                    .font(.system(size: 16, weight: .black, design: .monospaced))
+                    .tracking(1.5)
                     .foregroundStyle(
                         LinearGradient(
                             colors: [rankColor, rankColor.opacity(0.7)],
@@ -91,13 +89,13 @@ struct XPDisplay: View {
                     )
                 
                 Text("\(totalXP) XP")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
                     .animation(.spring(response: 0.3), value: totalXP)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(rankColor.opacity(0.1))
@@ -107,48 +105,22 @@ struct XPDisplay: View {
                     )
             )
             
-            // Progress to next rank
             if !nextRankName.isEmpty && xpToNextRank > 0 {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("Next: \(nextRankName.uppercased())")
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        
-                        Spacer()
-                        
+                VStack(alignment: .leading, spacing: 5) {
+                    LabeledContent("Next: \(nextRankName.uppercased())") {
                         Text("\(xpToNextRank) XP")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundStyle(.secondary)
                     }
                     
-                    // Progress bar
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            // Background
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(.white.opacity(0.1))
-                            
-                            // Fill
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [rankColor, rankColor.opacity(0.7)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .frame(width: geo.size.width * rankProgress)
-                                .animation(.spring(response: 0.5), value: rankProgress)
-                        }
-                    }
-                    .frame(height: 12)
+                    ProgressView(value: rankProgress)
+                        .tint(rankColor)
                     
-                    // Progress percentage
                     Text("\(Int(rankProgress * 100))%")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -167,15 +139,15 @@ struct XPDisplay: View {
         case "recruit":
             return .gray
         case "private":
-            return Color(red: 0.3, green: 0.5, blue: 0.8)  // Navy blue
+            return AppTheme.primaryTint
         case "corporal":
-            return Color(red: 0.3, green: 0.6, blue: 0.3)  // Olive green
+            return AppTheme.canvasAccent
         case "sergeant":
-            return Color(red: 0.6, green: 0.3, blue: 0.8)  // Purple
+            return AppTheme.successTint
         case "staff sergeant":
-            return Color(red: 0.8, green: 0.6, blue: 0.2)  // Gold
+            return AppTheme.warningTint
         case "captain":
-            return Color(red: 0.9, green: 0.4, blue: 0.2)  // Orange
+            return AppTheme.dangerTint
         default:
             return .white
         }

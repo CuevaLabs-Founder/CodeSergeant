@@ -1,8 +1,8 @@
-# Code Sergeant UI Redesign - Implementation Complete ✅
+# Code Sergeant UI Redesign - Historical Implementation Notes
 
 ## Summary
 
-Successfully implemented a military-themed, ADHD-friendly redesign with full XP/rank gamification, warning strobe system, and all critical bug fixes.
+This document describes the earlier redesign pass and should be read as a historical implementation log, not the current source of truth for the UI.
 
 ## What Was Implemented
 
@@ -147,7 +147,7 @@ Successfully implemented a military-themed, ADHD-friendly redesign with full XP/
 
 ### 1. Start the Backend
 ```bash
-cd /Users/cuevalabs/.cursor/worktrees/CodeSergeant/sne
+cd /Users/cuevalabs/Desktop/Projects/CodeSergeant
 source .venv/bin/activate
 python bridge/server.py
 ```

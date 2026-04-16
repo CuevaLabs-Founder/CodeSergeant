@@ -14,8 +14,6 @@ struct TimerDisplay: View {
     let totalSeconds: Int
     let isBreak: Bool
     
-    @State private var pulseAnimation = false
-    
     private var progress: Double {
         guard totalSeconds > 0 else { return 0 }
         return Double(totalSeconds - remainingSeconds) / Double(totalSeconds)
@@ -28,88 +26,60 @@ struct TimerDisplay: View {
     }
     
     var body: some View {
-        ZStack {
-            // Background ring
+        VStack(spacing: 10) {
             Circle()
-                .stroke(
-                    LinearGradient(
-                        colors: [.white.opacity(0.1), .white.opacity(0.05)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 12
-                )
-            
-            // Progress ring
-            Circle()
-                .trim(from: 0, to: progress)
-                .stroke(
-                    AngularGradient(
-                        colors: isBreak
-                            ? [.green.opacity(0.8), .teal.opacity(0.8)]
-                            : [.blue.opacity(0.8), .purple.opacity(0.8)],
-                        center: .center
-                    ),
-                    style: StrokeStyle(lineWidth: 12, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
-                .animation(.easeInOut(duration: 0.5), value: progress)
-            
-            // Glow effect
-            Circle()
-                .trim(from: max(0, progress - 0.05), to: progress)
-                .stroke(
-                    isBreak ? Color.green : Color.blue,
-                    style: StrokeStyle(lineWidth: 12, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
-                .blur(radius: 8)
-                .opacity(0.6)
-            
-            // Inner content
-            VStack(spacing: 4) {
-                // Status label
-                Text(isBreak ? "BREAK" : "FOCUS")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .tracking(2)
-                
-                // Time display
-                Text(timeString)
-                    .font(.system(size: 48, weight: .bold, design: .rounded))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.white, .white.opacity(0.8)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                .trim(from: 0, to: 0.82)
+                .stroke(Color.white.opacity(0.1), style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                .overlay {
+                    Circle()
+                        .trim(from: 0, to: min(max(progress, 0.02), 0.82))
+                        .stroke(
+                            LinearGradient(
+                                colors: isBreak
+                                    ? [AppTheme.successTint, AppTheme.canvasAccent]
+                                    : [AppTheme.primaryTint, AppTheme.canvasAccent],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            style: StrokeStyle(lineWidth: 10, lineCap: .round)
                         )
-                    )
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: remainingSeconds)
-                
-                // Progress percentage
-                Text("\(Int(progress * 100))%")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
-            }
-            .scaleEffect(pulseAnimation ? 1.02 : 1.0)
-            .animation(
-                .easeInOut(duration: 1)
-                .repeatForever(autoreverses: true),
-                value: pulseAnimation
-            )
+                        .rotationEffect(.degrees(-90))
+                        .animation(.easeInOut(duration: 0.35), value: progress)
+                }
+                .rotationEffect(.degrees(125))
+                .frame(width: 140, height: 140)
+                .overlay {
+                    VStack(spacing: 4) {
+                        Text(isBreak ? "BREAK" : "FOCUS")
+                            .font(.caption2)
+                            .bold()
+                            .foregroundStyle(.secondary)
+                        
+                        Text(timeString)
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .contentTransition(.numericText())
+                            .animation(.spring(response: 0.28, dampingFraction: 0.8), value: remainingSeconds)
+                        
+                        Text("\(Int(progress * 100))% complete")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            
+            Text(isBreak ? "Take a breath, then get back in." : "Stay with the mission in front of you.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 180)
         }
-        .frame(width: 200, height: 200)
-        .padding(20)
-        .glassCard(cornerRadius: 100, backgroundOpacity: 0.2)
-        .onAppear {
-            pulseAnimation = true
-        }
+        .padding(14)
+        .glassCard(cornerRadius: 24)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(isBreak ? "Break timer" : "Focus timer")
+        .accessibilityValue("\(timeString), \(Int(progress * 100)) percent complete")
     }
 }
-
-// MARK: - Compact Timer
 
 struct CompactTimerDisplay: View {
     let remainingSeconds: Int
@@ -122,26 +92,23 @@ struct CompactTimerDisplay: View {
     }
     
     var body: some View {
-        HStack(spacing: 8) {
-            // Status indicator
-            Circle()
-                .fill(isBreak ? Color.green : Color.blue)
-                .frame(width: 8, height: 8)
-            
-            // Time
-            Text(timeString)
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.primary)
-            
-            // Label
-            Text(isBreak ? "break" : "focus")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+        Label {
+            HStack(spacing: 8) {
+                Text(timeString)
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                
+                Text(isBreak ? "break" : "focus")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: isBreak ? "figure.mind.and.body" : "timer")
+                .foregroundStyle(isBreak ? AppTheme.successTint : AppTheme.primaryTint)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .glassCard(cornerRadius: 20, backgroundOpacity: 0.2)
+        .glassCard(cornerRadius: 16)
     }
 }
 
@@ -153,8 +120,6 @@ struct TimerSlider: View {
     let range: ClosedRange<Double>
     let step: Double
     let unit: String
-    
-    @State private var isEditing = false
     
     init(
         label: String,
@@ -171,14 +136,8 @@ struct TimerSlider: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(label)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-                
-                Spacer()
-                
+        VStack(alignment: .leading, spacing: 8) {
+            LabeledContent(label) {
                 Text("\(Int(value)) \(unit)")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
@@ -186,66 +145,10 @@ struct TimerSlider: View {
                     .animation(.spring(response: 0.2), value: value)
             }
             
-            // Custom slider
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    // Track background
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(.white.opacity(0.1))
-                        .frame(height: 12)
-                    
-                    // Filled track
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(
-                            LinearGradient(
-                                colors: [.blue.opacity(0.8), .purple.opacity(0.8)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(
-                            width: trackWidth(in: geometry.size.width),
-                            height: 12
-                        )
-                    
-                    // Thumb
-                    Circle()
-                        .fill(.white)
-                        .frame(width: isEditing ? 24 : 20, height: isEditing ? 24 : 20)
-                        .shadow(color: .blue.opacity(0.3), radius: isEditing ? 8 : 4)
-                        .offset(x: thumbOffset(in: geometry.size.width))
-                        .gesture(
-                            DragGesture()
-                                .onChanged { gesture in
-                                    isEditing = true
-                                    updateValue(from: gesture.location.x, in: geometry.size.width)
-                                }
-                                .onEnded { _ in
-                                    isEditing = false
-                                }
-                        )
-                        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isEditing)
-                }
-            }
-            .frame(height: 24)
+            Slider(value: $value, in: range, step: step)
+                .tint(AppTheme.primaryTint)
         }
-    }
-    
-    private func trackWidth(in totalWidth: CGFloat) -> CGFloat {
-        let percent = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
-        return totalWidth * CGFloat(percent)
-    }
-    
-    private func thumbOffset(in totalWidth: CGFloat) -> CGFloat {
-        let percent = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
-        return (totalWidth - 20) * CGFloat(percent)
-    }
-    
-    private func updateValue(from x: CGFloat, in totalWidth: CGFloat) {
-        let percent = max(0, min(1, x / totalWidth))
-        let rawValue = range.lowerBound + (range.upperBound - range.lowerBound) * Double(percent)
-        let steppedValue = (rawValue / step).rounded() * step
-        value = max(range.lowerBound, min(range.upperBound, steppedValue))
+        .padding(.vertical, 4)
     }
 }
 
@@ -282,4 +185,3 @@ struct TimerSlider: View {
     .frame(width: 400, height: 600)
     .background(GlassBackground())
 }
-

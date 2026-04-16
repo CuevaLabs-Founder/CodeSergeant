@@ -17,7 +17,15 @@ let package = Package(
             name: "CodeSergeantUI",
             dependencies: [],
             path: ".",
-            exclude: ["Package.swift"],
+            exclude: [
+                "Package.swift",
+                "Info.plist",
+                "CodeSergeantUI.entitlements",
+                "project.yml",
+                "fix_xcode_project.sh",
+                "README.md",
+                "CodeSergeantUI.xcodeproj",
+            ],
             sources: [
                 "CodeSergeantApp.swift",
                 "Views/DashboardView.swift",
@@ -26,9 +34,12 @@ let package = Package(
                 "Views/Components/GlassCard.swift",
                 "Views/Components/LiquidButton.swift",
                 "Views/Components/TimerDisplay.swift",
+                "Views/Components/XPDisplay.swift",
+                "Views/Components/WarningStrobeOverlay.swift",
                 "Models/SessionModel.swift",
                 "Models/ConfigModel.swift",
-                "Services/PythonBridge.swift"
+                "Services/PythonBridge.swift",
+                "Services/GlassEffect.swift"
             ],
             resources: [
                 .process("Resources")
@@ -36,4 +47,3 @@ let package = Package(
         )
     ]
 )
-

@@ -68,3 +68,8 @@ Packages/
 .env.local
 .env.*.local
 secrets.json
+.codeium/
+
+# Claude Code / tooling
+.agents/
+skills-lock.json

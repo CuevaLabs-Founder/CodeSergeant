@@ -2,7 +2,7 @@
 //  MenuBarView.swift
 //  CodeSergeantUI
 //
-//  Menu bar dropdown with liquid glass design, XP system, and warning strobe
+//  Single-window menu bar container with a shared fixed size.
 //
 
 import SwiftUI
@@ -10,341 +10,374 @@ import AppKit
 
 struct MenuBarView: View {
     @EnvironmentObject var appState: AppState
-    @Environment(\.openWindow) private var openWindow
-    @State private var showingEndSessionAlert = false
-    
+
+    @State private var hostedWindow: NSWindow?
+    @State private var anchorMidX: CGFloat?
+    @State private var anchorTopY: CGFloat?
+
+    var body: some View {
+        ZStack {
+            GlassBackground()
+
+            Group {
+                switch appState.menuPanel {
+                case .home:
+                    HomePanel()
+                case .session:
+                    DashboardView()
+                case .settings:
+                    SettingsPanelContainer()
+                }
+            }
+            .padding(AppTheme.shellInset)
+        }
+        .frame(width: panelSize.width, height: panelSize.height)
+        .clipShape(.rect(cornerRadius: 18))
+        .warningStrobe(status: appState.warningStatus)
+        .background {
+            MenuBarWindowAccessor { window in
+                captureWindow(window)
+            }
+        }
+        .onAppear {
+            repositionWindow()
+        }
+        .onChange(of: appState.menuPanel) {
+            repositionWindow()
+        }
+        .onChange(of: appState.isSessionActive) {
+            repositionWindow()
+        }
+    }
+
+    private var panelSize: CGSize {
+        CGSize(width: AppTheme.panelWidth, height: AppTheme.panelHeight)
+    }
+
+    private func captureWindow(_ window: NSWindow?) {
+        guard let window else { return }
+
+        if hostedWindow !== window {
+            hostedWindow = window
+            anchorMidX = window.frame.midX
+            anchorTopY = window.frame.maxY
+            repositionWindow()
+        }
+    }
+
+    private func repositionWindow() {
+        DispatchQueue.main.async {
+            guard let window = hostedWindow else { return }
+
+            if anchorMidX == nil {
+                anchorMidX = window.frame.midX
+            }
+            if anchorTopY == nil {
+                anchorTopY = window.frame.maxY
+            }
+
+            let targetSize = panelSize
+            var frame = window.frame
+            let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? frame
+
+            frame.size = targetSize
+            frame.origin.x = (anchorMidX ?? window.frame.midX) - (targetSize.width / 2)
+            frame.origin.y = (anchorTopY ?? window.frame.maxY) - targetSize.height
+
+            let horizontalInset: CGFloat = 12
+            let verticalInset: CGFloat = 8
+            let minX = visibleFrame.minX + horizontalInset
+            let maxX = visibleFrame.maxX - targetSize.width - horizontalInset
+            let minY = visibleFrame.minY + verticalInset
+            let maxY = visibleFrame.maxY - targetSize.height
+
+            frame.origin.x = min(max(frame.origin.x, minX), maxX)
+            frame.origin.y = min(max(frame.origin.y, minY), maxY)
+
+            window.setFrame(frame, display: true, animate: false)
+        }
+    }
+}
+
+private struct HomePanel: View {
+    @EnvironmentObject var appState: AppState
+    @State private var showingEndSessionConfirmation = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MenuBarHeader(
+                isSessionActive: appState.isSessionActive,
+                currentRank: appState.currentRank
+            )
+            .padding(AppTheme.chromePadding)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                if appState.isSessionActive {
+                    HStack(alignment: .top, spacing: 12) {
+                        XPDisplay(
+                            totalXP: appState.totalXP,
+                            sessionXP: appState.sessionXP,
+                            currentRank: appState.currentRank,
+                            rankProgress: appState.rankProgress,
+                            nextRankName: appState.nextRankName,
+                            xpToNextRank: appState.xpToNextRank,
+                            isCompact: true
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        CompactTimerDisplay(
+                            remainingSeconds: appState.remainingSeconds,
+                            isBreak: appState.isBreak
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if !appState.sessionGoal.isEmpty {
+                        HoverGlassCard(cornerRadius: 16) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label("Current mission", systemImage: "target")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+
+                                Text(appState.sessionGoal)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(2)
+                            }
+                            .padding(14)
+                        }
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "No Active Session",
+                        systemImage: "moon.zzz.fill",
+                        description: Text("Start a focus session to track time, XP, and warnings.")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                }
+            }
+            .padding(AppTheme.chromePadding)
+
+            Divider()
+
+            VStack(spacing: 8) {
+                if appState.isSessionActive {
+                    HStack(spacing: 8) {
+                        MenuBarButton(
+                            title: "Session View",
+                            icon: "rectangle.portrait.on.rectangle.portrait.fill",
+                            tint: AppTheme.primaryTint
+                        ) {
+                            appState.showSession()
+                        }
+
+                        MenuBarButton(
+                            title: appState.isPaused ? "Resume" : "Pause",
+                            icon: appState.isPaused ? "play.fill" : "pause.fill",
+                            tint: AppTheme.primaryTint,
+                            action: pauseOrResume
+                        )
+                    }
+
+                    HStack(spacing: 8) {
+                        if appState.isBreak {
+                            MenuBarButton(
+                                title: "Skip Break",
+                                icon: "forward.fill",
+                                tint: AppTheme.successTint,
+                                action: appState.skipBreak
+                            )
+                        }
+
+                        MenuBarButton(
+                            title: "Settings",
+                            icon: "gearshape.fill",
+                            tint: AppTheme.canvasAccent
+                        ) {
+                            appState.showSettings()
+                        }
+
+                        if !appState.isBreak {
+                            MenuBarButton(
+                                title: "Quit Session",
+                                icon: "stop.fill",
+                                tint: AppTheme.dangerTint
+                            ) {
+                                showingEndSessionConfirmation = true
+                            }
+                        }
+                    }
+
+                    if appState.isBreak {
+                        MenuBarButton(
+                            title: "Quit Session",
+                            icon: "stop.fill",
+                            tint: AppTheme.dangerTint
+                        ) {
+                            showingEndSessionConfirmation = true
+                        }
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        MenuBarButton(
+                            title: "Start Focus Session",
+                            icon: "play.fill",
+                            tint: AppTheme.primaryTint
+                        ) {
+                            appState.showSession()
+                        }
+
+                        MenuBarButton(
+                            title: "Settings",
+                            icon: "gearshape.fill",
+                            tint: AppTheme.canvasAccent
+                        ) {
+                            appState.showSettings()
+                        }
+                    }
+                }
+
+                MenuBarButton(
+                    title: "Quit App",
+                    icon: "power",
+                    tint: AppTheme.warningTint
+                ) {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+            .padding(AppTheme.chromePadding)
+        }
+        .background(.thinMaterial)
+        .confirmationDialog(
+            "Quit session early?",
+            isPresented: $showingEndSessionConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Quit Session", role: .destructive) {
+                appState.endSession(early: true)
+            }
+            Button("Keep Going", role: .cancel) {}
+        } message: {
+            Text("Ending now applies your configured early-exit XP penalty.")
+        }
+    }
+
+    private func pauseOrResume() {
+        if appState.isPaused {
+            appState.resumeSession()
+        } else {
+            appState.pauseSession()
+        }
+    }
+}
+
+private struct SettingsPanelContainer: View {
+    @EnvironmentObject var appState: AppState
+
     var body: some View {
         VStack(spacing: 0) {
-            // Header with rank/status
-            headerSection
-            
-            Divider().background(.white.opacity(0.1))
-            
-            // XP Display (compact)
-            xpSection
-            
-            Divider().background(.white.opacity(0.1))
-            
-            // Quick status
-            statusSection
-            
-            Divider().background(.white.opacity(0.1))
-            
-            // Actions
-            actionsSection
-            
-            Divider().background(.white.opacity(0.1))
-            
-            // Footer
-            footerSection
+            HStack(spacing: 12) {
+                LiquidIconButton("Back", icon: "chevron.left") {
+                    appState.closeSettings()
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Settings")
+                        .font(.headline)
+                    Text("Everything stays in the menu bar now.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, AppTheme.chromePadding)
+            .padding(.top, AppTheme.chromePadding)
+            .padding(.bottom, 8)
+
+            SettingsView()
+                .environmentObject(appState)
         }
-        .frame(width: 300)
-        .background(.ultraThinMaterial)
-        .warningStrobe(status: appState.warningStatus)  // Apply strobe border
     }
-    
-    // MARK: - Header
-    
-    private var headerSection: some View {
-        HStack(spacing: 12) {
-            // App icon (using SF Symbol until custom icon.png provided)
+}
+
+private struct MenuBarHeader: View {
+    let isSessionActive: Bool
+    let currentRank: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: "shield.lefthalf.filled")
-                .font(.system(size: 24))
+                .font(.title2.weight(.bold))
                 .foregroundStyle(
                     LinearGradient(
-                        colors: militaryGradient,
+                        colors: [AppTheme.canvasAccent, AppTheme.primaryTint],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-            
+
             VStack(alignment: .leading, spacing: 2) {
-                Text("CODE SERGEANT")
-                    .font(.system(size: 14, weight: .black, design: .monospaced))
-                    .tracking(1)
-                
-                // Status with color dot
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(statusDotColor)
-                        .frame(width: 8, height: 8)
-                    
-                    Text(appState.isSessionActive ? "ACTIVE" : "READY")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            
-            Spacer()
-        }
-        .padding(16)
-    }
-    
-    // MARK: - XP Section
-    
-    private var xpSection: some View {
-        VStack(spacing: 8) {
-            XPDisplay(
-                totalXP: appState.totalXP,
-                sessionXP: appState.sessionXP,
-                currentRank: appState.currentRank,
-                rankProgress: appState.rankProgress,
-                nextRankName: appState.nextRankName,
-                xpToNextRank: appState.xpToNextRank,
-                isCompact: true
-            )
-            
-            // Session stats (if active)
-            if appState.isSessionActive {
-                HStack(spacing: 12) {
-                    StatPill(icon: "clock.fill", value: "\(appState.focusTimeMinutes)m")
-                    if !appState.sessionGoal.isEmpty {
-                        StatPill(icon: "target", value: appState.sessionGoal, isText: true)
-                    }
-                }
-            }
-        }
-        .padding(12)
-    }
-    
-    // MARK: - Status
-    
-    private var statusSection: some View {
-        VStack(spacing: 8) {
-            if appState.isSessionActive {
-                CompactTimerDisplay(
-                    remainingSeconds: appState.remainingSeconds,
-                    isBreak: appState.isBreak
-                )
-            } else {
-                Text("No active session")
-                    .font(.system(size: 12))
+                Text("Code Sergeant")
+                    .font(.headline)
+
+                Text(isSessionActive ? "Active • \(currentRank)" : "Ready • \(currentRank)")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-    }
-    
-    // MARK: - Actions
-    
-    private var actionsSection: some View {
-        VStack(spacing: 4) {
-            if appState.isSessionActive {
-                // Pause/Resume toggle with proper state - FIXED
-                MenuBarButton(
-                    title: appState.isPaused ? "Resume" : "Pause",
-                    icon: appState.isPaused ? "play.fill" : "pause.fill"
-                ) {
-                    if appState.isPaused {
-                        appState.resumeSession()
-                    } else {
-                        appState.pauseSession()
-                    }
-                }
-                
-                // End session with confirmation - FIXED
-                MenuBarButton(
-                    title: "End Session",
-                    icon: "stop.fill",
-                    color: .red
-                ) {
-                    showEndSessionConfirmation()
-                }
-                
-                // Skip break (if on break)
-                if appState.isBreak {
-                    MenuBarButton(
-                        title: "Skip Break",
-                        icon: "forward.fill",
-                        color: .orange
-                    ) {
-                        appState.skipBreak()
-                    }
-                }
-            } else {
-                // Start focus session
-                MenuBarButton(
-                    title: "Start Focus Session",
-                    icon: "play.fill",
-                    color: .blue
-                ) {
-                    openWindow(id: "dashboard")
-                }
-            }
-            
-            // Dashboard access
-            MenuBarButton(
-                title: "Open Dashboard",
-                icon: "chart.bar.fill"
-            ) {
-                openWindow(id: "dashboard")
-            }
-        }
-        .padding(8)
-    }
-    
-    // MARK: - Footer
-    
-    private var footerSection: some View {
-        HStack(spacing: 8) {
-            // Settings button - FIXED
-            Button {
-                if #available(macOS 14.0, *) {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                } else {
-                    NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-                }
-            } label: {
-                Label("Settings", systemImage: "gear")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            
+
             Spacer()
-            
-            // AI status indicator
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(appState.openAIAvailable || appState.ollamaAvailable ? Color.green : Color.red)
-                    .frame(width: 6, height: 6)
-                
-                Text(appState.primaryBackend.uppercased())
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            
-            // Quit button
-            Button {
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Image(systemName: "power")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-    
-    // MARK: - Helpers
-    
-    private var militaryGradient: [Color] {
-        [Color(red: 0.3, green: 0.5, blue: 0.2), Color(red: 0.2, green: 0.3, blue: 0.5)]  // Olive green + navy blue
-    }
-    
-    private var statusDotColor: Color {
-        switch appState.warningStatus {
-        case .green:
-            return .green
-        case .yellow:
-            return .yellow
-        case .red:
-            return .red
-        }
-    }
-    
-    private func showEndSessionConfirmation() {
-        let penalty = Int(Double(appState.sessionXP) * 0.5)  // 50% penalty
-        
-        let alert = NSAlert()
-        alert.messageText = "End Session Early?"
-        alert.informativeText = "Ending now will lose \(penalty) XP (50% penalty).\n\nAre you sure you want to end?"
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "End Session")
-        alert.addButton(withTitle: "Keep Going")
-        
-        let response = alert.runModal()
-        
-        if response == .alertFirstButtonReturn {
-            // End with early penalty
-            endSessionEarly()
-        }
-    }
-    
-    private func endSessionEarly() {
-        guard let url = URL(string: "http://127.0.0.1:5050/api/session/end") else { return }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        // Pass early=true to apply XP penalty
-        let body: [String: Any] = ["early": true]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
-        URLSession.shared.dataTask(with: request) { [weak appState] data, response, error in
-            if error == nil {
-                DispatchQueue.main.async {
-                    appState?.isSessionActive = false
-                    appState?.sessionGoal = ""
-                    appState?.focusTimeMinutes = 0
-                }
-            }
-        }.resume()
     }
 }
 
-// MARK: - Helper Components
-
-struct StatPill: View {
-    let icon: String
-    let value: String
-    var isText: Bool = false
-    
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            
-            Text(value)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-            Capsule()
-                .fill(.white.opacity(0.08))
-        )
-    }
-}
-
-// MARK: - Menu Bar Button
-
-struct MenuBarButton: View {
+private struct MenuBarButton: View {
     let title: String
     let icon: String
-    var color: Color = .primary
+    let tint: Color
     let action: () -> Void
-    
+
     @State private var isHovering = false
-    
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 12))
-                    .foregroundStyle(color)
-                    .frame(width: 20)
-                
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(tint)
+
                 Text(title)
-                    .font(.system(size: 13))
-                
-                Spacer()
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isHovering ? .white.opacity(0.1) : .clear)
-            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: AppTheme.controlMinHeight)
+            .padding(.horizontal, 14)
+            .background {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(isHovering ? Color.white.opacity(0.08) : Color.white.opacity(0.03))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(tint.opacity(0.18), lineWidth: 1)
+                    }
+            }
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(tint)
+                    .frame(width: 3)
+                    .padding(.vertical, 10)
+                    .clipShape(.rect(cornerRadius: 3))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
+        .help(title)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
@@ -353,10 +386,25 @@ struct MenuBarButton: View {
     }
 }
 
-// MARK: - Preview
+private struct MenuBarWindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            onResolve(view.window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            onResolve(nsView.window)
+        }
+    }
+}
 
 #Preview {
     MenuBarView()
         .environmentObject(AppState())
-        .frame(width: 300)
 }
