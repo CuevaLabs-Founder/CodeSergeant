@@ -109,7 +109,7 @@ extension View {
     VStack(spacing: 30) {
         // Green - on task
         Text("On Task")
-            .font(.system(size: 24, weight: .bold))
+            .font(.system(size: 26, weight: .bold))
             .frame(width: 200, height: 100)
             .background(.ultraThinMaterial)
             .clipShape(.rect(cornerRadius: 12))
@@ -117,7 +117,7 @@ extension View {
         
         // Yellow - thinking
         Text("Thinking")
-            .font(.system(size: 24, weight: .bold))
+            .font(.system(size: 26, weight: .bold))
             .frame(width: 200, height: 100)
             .background(.ultraThinMaterial)
             .clipShape(.rect(cornerRadius: 12))
@@ -125,7 +125,7 @@ extension View {
         
         // Red - off task (flashing)
         Text("Off Task")
-            .font(.system(size: 24, weight: .bold))
+            .font(.system(size: 26, weight: .bold))
             .frame(width: 200, height: 100)
             .background(.ultraThinMaterial)
             .clipShape(.rect(cornerRadius: 12))

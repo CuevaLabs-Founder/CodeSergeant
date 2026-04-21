@@ -13,18 +13,26 @@ struct TimerDisplay: View {
     let remainingSeconds: Int
     let totalSeconds: Int
     let isBreak: Bool
-    
+    var pomodoroState: String = "work"
+    var sessionEndedEarly: Bool = false
+
+    private var isDone: Bool {
+        pomodoroState == "stopped" && remainingSeconds == 0
+    }
+
     private var progress: Double {
+        if isDone { return 0.82 }
         guard totalSeconds > 0 else { return 0 }
         return Double(totalSeconds - remainingSeconds) / Double(totalSeconds)
     }
-    
+
     private var timeString: String {
+        if isDone { return "DONE" }
         let minutes = remainingSeconds / 60
         let seconds = remainingSeconds % 60
         return String(format: "%02d:%02d", minutes, seconds)
     }
-    
+
     var body: some View {
         VStack(spacing: 10) {
             Circle()
@@ -32,12 +40,14 @@ struct TimerDisplay: View {
                 .stroke(Color.white.opacity(0.1), style: StrokeStyle(lineWidth: 10, lineCap: .round))
                 .overlay {
                     Circle()
-                        .trim(from: 0, to: min(max(progress, 0.02), 0.82))
+                        .trim(from: 0, to: min(max(progress, isDone ? 0.82 : 0.02), 0.82))
                         .stroke(
                             LinearGradient(
-                                colors: isBreak
-                                    ? [AppTheme.successTint, AppTheme.canvasAccent]
-                                    : [AppTheme.primaryTint, AppTheme.canvasAccent],
+                                colors: isDone
+                                    ? [AppTheme.warningTint, AppTheme.successTint]
+                                    : isBreak
+                                        ? [AppTheme.successTint, AppTheme.canvasAccent]
+                                        : [AppTheme.primaryTint, AppTheme.canvasAccent],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             ),
@@ -50,24 +60,28 @@ struct TimerDisplay: View {
                 .frame(width: 140, height: 140)
                 .overlay {
                     VStack(spacing: 4) {
-                        Text(isBreak ? "BREAK" : "FOCUS")
+                        Text(isDone ? "COMPLETE" : isBreak ? "BREAK" : "FOCUS")
                             .font(.caption2)
                             .bold()
-                            .foregroundStyle(.secondary)
-                        
+                            .foregroundStyle(isDone ? AppTheme.warningTint : .secondary)
+
                         Text(timeString)
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                            .font(.system(size: isDone ? 24 : 32, weight: .bold, design: .rounded))
                             .monospacedDigit()
                             .contentTransition(.numericText())
                             .animation(.spring(response: 0.28, dampingFraction: 0.8), value: remainingSeconds)
-                        
-                        Text("\(Int(progress * 100))% complete")
+
+                        Text(isDone ? (sessionEndedEarly ? "Focus up next time" : "Well done!") : "\(Int(progress * 100))% complete")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(isDone ? AppTheme.successTint : .secondary)
                     }
                 }
-            
-            Text(isBreak ? "Take a breath, then get back in." : "Stay with the mission in front of you.")
+
+            Text(isDone
+                 ? (sessionEndedEarly ? "Session cut short. Try to go the distance." : "Session finished. Sergeant is proud.")
+                 : isBreak
+                    ? "Take a breath, then get back in."
+                    : "Stay with the mission in front of you.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -76,8 +90,8 @@ struct TimerDisplay: View {
         .padding(14)
         .glassCard(cornerRadius: 24)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(isBreak ? "Break timer" : "Focus timer")
-        .accessibilityValue("\(timeString), \(Int(progress * 100)) percent complete")
+        .accessibilityLabel(isDone ? "Session complete" : isBreak ? "Break timer" : "Focus timer")
+        .accessibilityValue(isDone ? "Done" : "\(timeString), \(Int(progress * 100)) percent complete")
     }
 }
 
@@ -95,7 +109,7 @@ struct CompactTimerDisplay: View {
         Label {
             HStack(spacing: 8) {
                 Text(timeString)
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                 
                 Text(isBreak ? "break" : "focus")
@@ -139,7 +153,7 @@ struct TimerSlider: View {
         VStack(alignment: .leading, spacing: 8) {
             LabeledContent(label) {
                 Text("\(Int(value)) \(unit)")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
                     .monospacedDigit()
                     .animation(.spring(response: 0.2), value: value)

@@ -6,6 +6,7 @@ import queue
 import subprocess
 import tempfile
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 import pyttsx3
@@ -59,6 +60,251 @@ RECOMMENDED_VOICES = {
 }
 
 
+class MusicDucker:
+    """
+    Ducks audio from music apps and browsers while the sergeant speaks.
+
+    Strategy — targets sources independently so TTS always plays at full volume:
+
+      • Native apps (Spotify, Music.app): AppleScript `sound volume` property.
+      • Chromium browsers (Chrome, Brave, Edge, Arc …): JS injected into every tab
+        via `execute tab javascript`.
+      • Safari: JS injected via `do JavaScript … in tab`.
+
+    The macOS system output volume is intentionally never touched — doing so
+    would lower the TTS equally, defeating the purpose.
+
+    Firefox has no scriptable tab API on macOS; it is skipped.
+    """
+
+    _MUSIC_APPS = ["Spotify", "Music"]
+
+    # Chromium-based browsers that support AppleScript tab JS execution.
+    _CHROMIUM_BROWSERS = [
+        "Google Chrome",
+        "Brave Browser",
+        "Microsoft Edge",
+        "Arc",
+        "Vivaldi",
+        "Opera",
+    ]
+    _SAFARI_BROWSERS = ["Safari"]
+
+    # JS snippets — use single quotes only so the string is safe to embed
+    # inside an AppleScript double-quoted string with no escaping.
+    _DUCK_JS = (
+        "var _e=document.querySelectorAll('video,audio');"
+        "for(var _i=0;_i<_e.length;_i++){{"
+        "var _m=_e[_i];"
+        "if(!_m.paused&&_m.volume>{r}){{_m.dataset.sgtV=_m.volume;_m.volume={r};}}"
+        "}}"
+    )
+    _RESTORE_JS = (
+        "var _e=document.querySelectorAll('video,audio');"
+        "for(var _i=0;_i<_e.length;_i++){"
+        "var _m=_e[_i];"
+        "if(_m.dataset.sgtV){_m.volume=parseFloat(_m.dataset.sgtV);delete _m.dataset.sgtV;}"
+        "}"
+    )
+
+    def __init__(self, duck_to: int = 20, fade_steps: int = 0, step_delay: float = 0.03):
+        """
+        Args:
+            duck_to:     Target volume while speaking (0-100 for native apps;
+                         maps to 0.0-1.0 for HTML media elements).
+            fade_steps:  Fade steps for native apps (0 = instant).
+            step_delay:  Seconds between fade steps.
+        """
+        self.duck_to = max(0, min(100, duck_to))
+        self.fade_steps = fade_steps
+        self.step_delay = step_delay
+        self._saved_native: dict[str, int] = {}         # app → original volume
+        self._ducked_browsers: list[tuple[str, str]] = []  # (kind, app)
+
+    # ------------------------------------------------------------------
+    # Generic helpers
+    # ------------------------------------------------------------------
+
+    def _app_is_running(self, app: str) -> bool:
+        """Ask macOS whether the named application is currently running."""
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", f'application "{app}" is running'],
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+            return result.stdout.strip().lower() == "true"
+        except Exception:
+            return False
+
+    def _run_script(self, script: str) -> bool:
+        """Run a multi-line AppleScript passed via stdin. Returns True on success."""
+        try:
+            result = subprocess.run(
+                ["osascript", "-"],
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
+    # Native music app helpers
+    # ------------------------------------------------------------------
+
+    def _get_app_volume(self, app: str) -> Optional[int]:
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", f'tell application "{app}" to get sound volume'],
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return int(result.stdout.strip())
+        except Exception:
+            pass
+        return None
+
+    def _set_app_volume(self, app: str, level: int) -> None:
+        try:
+            subprocess.run(
+                ["osascript", "-e", f'tell application "{app}" to set sound volume to {level}'],
+                capture_output=True,
+                timeout=1.0,
+            )
+        except Exception:
+            pass
+
+    def _fade_app(self, app: str, from_level: int, to_level: int) -> None:
+        if self.fade_steps <= 0 or from_level == to_level:
+            self._set_app_volume(app, to_level)
+            return
+        step = (to_level - from_level) / self.fade_steps
+        for i in range(1, self.fade_steps + 1):
+            self._set_app_volume(app, int(from_level + step * i))
+            time.sleep(self.step_delay)
+
+    # ------------------------------------------------------------------
+    # Browser JS injection helpers
+    # ------------------------------------------------------------------
+
+    def _duck_js(self) -> str:
+        r = round(self.duck_to / 100.0, 3)
+        return self._DUCK_JS.format(r=r)
+
+    def _duck_chromium(self, app: str) -> bool:
+        js = self._duck_js()
+        script = f'''tell application "{app}"
+    repeat with w in windows
+        repeat with t in tabs of w
+            try
+                execute t javascript "{js}"
+            end try
+        end repeat
+    end repeat
+end tell'''
+        ok = self._run_script(script)
+        if ok:
+            logger.debug(f"Ducked browser tabs: {app}")
+        return ok
+
+    def _restore_chromium(self, app: str) -> None:
+        js = self._RESTORE_JS
+        script = f'''tell application "{app}"
+    repeat with w in windows
+        repeat with t in tabs of w
+            try
+                execute t javascript "{js}"
+            end try
+        end repeat
+    end repeat
+end tell'''
+        self._run_script(script)
+
+    def _duck_safari(self, app: str) -> bool:
+        js = self._duck_js()
+        script = f'''tell application "{app}"
+    repeat with w in windows
+        repeat with t in tabs of w
+            try
+                do JavaScript "{js}" in t
+            end try
+        end repeat
+    end repeat
+end tell'''
+        ok = self._run_script(script)
+        if ok:
+            logger.debug(f"Ducked Safari tabs")
+        return ok
+
+    def _restore_safari(self, app: str) -> None:
+        js = self._RESTORE_JS
+        script = f'''tell application "{app}"
+    repeat with w in windows
+        repeat with t in tabs of w
+            try
+                do JavaScript "{js}" in t
+            end try
+        end repeat
+    end repeat
+end tell'''
+        self._run_script(script)
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    def duck(self) -> None:
+        """Lower music app volumes and browser media elements."""
+        self._saved_native.clear()
+        self._ducked_browsers.clear()
+
+        # Native apps
+        for app in self._MUSIC_APPS:
+            if not self._app_is_running(app):
+                continue
+            vol = self._get_app_volume(app)
+            if vol is None or vol <= self.duck_to:
+                continue
+            self._saved_native[app] = vol
+            self._fade_app(app, vol, self.duck_to)
+            logger.debug(f"Ducked {app}: {vol} → {self.duck_to}")
+
+        # Chromium browsers
+        for app in self._CHROMIUM_BROWSERS:
+            if self._app_is_running(app):
+                if self._duck_chromium(app):
+                    self._ducked_browsers.append(("chromium", app))
+
+        # Safari
+        for app in self._SAFARI_BROWSERS:
+            if self._app_is_running(app):
+                if self._duck_safari(app):
+                    self._ducked_browsers.append(("safari", app))
+
+    def restore(self) -> None:
+        """Restore all ducked sources."""
+        # Native apps
+        for app, vol in self._saved_native.items():
+            current = self._get_app_volume(app) or self.duck_to
+            self._fade_app(app, current, vol)
+            logger.debug(f"Restored {app}: → {vol}")
+        self._saved_native.clear()
+
+        # Browsers
+        for kind, app in self._ducked_browsers:
+            if kind == "chromium":
+                self._restore_chromium(app)
+            elif kind == "safari":
+                self._restore_safari(app)
+        self._ducked_browsers.clear()
+
+
 class TTSService:
     """Non-blocking text-to-speech service with ElevenLabs support."""
 
@@ -71,6 +317,8 @@ class TTSService:
         rate: int = 200,
         volume: float = 1.0,
         optimize_for_speed: bool = True,
+        music_ducking: bool = True,
+        duck_volume: int = 20,
     ):
         """
         Initialize TTS service.
@@ -82,6 +330,8 @@ class TTSService:
             model_id: ElevenLabs model ID (default: eleven_turbo_v2_5)
             rate: Speech rate (words per minute) - only for pyttsx3
             volume: Volume level (0.0-1.0) - only for pyttsx3
+            music_ducking: Lower system audio while speaking, restore after.
+            duck_volume: System volume level (0-100) to duck to while speaking.
         """
         self.provider = provider.lower()
         self.api_key = api_key
@@ -90,6 +340,7 @@ class TTSService:
         self.rate = rate
         self.volume = volume
         self.optimize_for_speed = optimize_for_speed  # Store speed optimization flag
+        self._ducker = MusicDucker(duck_to=duck_volume) if music_ducking else None
         self.speak_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.worker_thread: Optional[threading.Thread] = None
@@ -640,11 +891,17 @@ class TTSService:
                 self._speaking_done.clear()
 
                 try:
-                    # Speak using the configured provider
-                    if self.provider == "elevenlabs" and self.client:
-                        self._speak_elevenlabs(text)
-                    else:
-                        self._speak_pyttsx3(text)
+                    # Duck music before speaking, restore after (always, even on error)
+                    if self._ducker:
+                        self._ducker.duck()
+                    try:
+                        if self.provider == "elevenlabs" and self.client:
+                            self._speak_elevenlabs(text)
+                        else:
+                            self._speak_pyttsx3(text)
+                    finally:
+                        if self._ducker:
+                            self._ducker.restore()
                 finally:
                     # Mark as done speaking
                     self._speaking.clear()

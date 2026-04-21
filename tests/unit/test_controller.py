@@ -256,8 +256,12 @@ class TestCooldownLogic:
 class TestControllerSessionEnd:
     """Regression tests for session teardown."""
 
-    @patch("code_sergeant.controller.write_session_log", return_value="session-log.json")
-    def test_end_session_still_clears_state_when_quit_message_is_duplicate(self, _mock_write_log):
+    @patch(
+        "code_sergeant.controller.write_session_log", return_value="session-log.json"
+    )
+    def test_end_session_still_clears_state_when_quit_message_is_duplicate(
+        self, _mock_write_log
+    ):
         """Ending a session must not bail out before clearing active state."""
         controller = AppController.__new__(AppController)
         controller.state = ControllerState(
@@ -279,7 +283,9 @@ class TestControllerSessionEnd:
         controller.motivation_monitor = Mock()
         controller.screen_monitor = Mock()
         controller.xp_manager = Mock()
-        controller.xp_manager.state = Mock(session_xp=12, total_xp=120, current_rank="Private")
+        controller.xp_manager.state = Mock(
+            session_xp=12, total_xp=120, current_rank="Private"
+        )
         controller.xp_manager.deduct_xp_for_early_end.return_value = 6
         controller.personality_manager = Mock()
         controller.personality_manager.get_phrase.return_value = "Wrap it up."
@@ -302,6 +308,73 @@ class TestControllerSessionEnd:
         controller.pomodoro.stop.assert_called_once()
         controller.motivation_monitor.stop.assert_called_once()
         controller.screen_monitor.stop.assert_called_once()
+
+
+@pytest.mark.unit
+class TestVoiceActivationGuards:
+    """Regression tests for off-session voice activation."""
+
+    def make_minimal_controller(self):
+        controller = AppController.__new__(AppController)
+        controller.state = ControllerState(session_active=False)
+        controller.event_queue = queue.Queue()
+        controller.wake_word_detector = None
+        controller.voice_worker = None
+        controller.tts_service = MockTTSService()
+        controller.config = {}
+        controller._last_wake_phrase_time = None
+        controller._wake_phrase_authorization_seconds = 30.0
+        return controller
+
+    def test_voice_interaction_ignored_outside_session_without_wake_phrase(self):
+        controller = self.make_minimal_controller()
+
+        with patch("code_sergeant.controller.threading.Thread") as mock_thread:
+            started = controller.start_voice_interaction()
+
+        assert started is False
+        assert controller.voice_worker is None
+        assert controller.tts_service.spoken_texts == []
+        mock_thread.assert_not_called()
+
+    def test_wake_word_detection_authorizes_off_session_voice_interaction(self):
+        controller = self.make_minimal_controller()
+        controller.start_voice_interaction = Mock(return_value=True)
+
+        controller._on_wake_word_detected("hey sergeant")
+
+        assert controller._last_wake_phrase_time is not None
+        controller.start_voice_interaction.assert_called_once_with(
+            triggered_by_wake_word=True
+        )
+
+        event = controller.event_queue.get_nowait()
+        assert event["type"] == "wake_word_detected"
+        assert event["wake_word"] == "hey sergeant"
+
+    def test_note_taking_ignored_outside_session_without_wake_phrase(self):
+        controller = self.make_minimal_controller()
+
+        with patch("code_sergeant.controller.load_whisper_backend") as mock_load:
+            started = controller.start_note_taking()
+
+        assert started is False
+        mock_load.assert_not_called()
+
+    def test_note_wake_word_authorizes_off_session_note_taking(self):
+        controller = self.make_minimal_controller()
+        controller.start_note_taking = Mock(return_value=True)
+
+        controller._on_note_taking_triggered("take note sergeant")
+
+        assert controller._last_wake_phrase_time is not None
+        controller.start_note_taking.assert_called_once_with(
+            triggered_by_wake_word=True
+        )
+
+        event = controller.event_queue.get_nowait()
+        assert event["type"] == "note_taking_triggered"
+        assert event["wake_word"] == "take note sergeant"
 
 
 @pytest.mark.unit

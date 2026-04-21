@@ -28,21 +28,26 @@ struct SettingsView: View {
                 case .ai:
                     AISettingsTab()
                         .environmentObject(appState)
+                        .transition(.opacity)
                 case .xp:
                     XPSettingsTab()
+                        .transition(.opacity)
                 case .monitoring:
                     ScreenMonitoringTab()
                         .environmentObject(appState)
+                        .transition(.opacity)
                 case .personality:
                     PersonalityTab()
+                        .transition(.opacity)
                 case .about:
                     AboutTab()
+                        .transition(.opacity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .animation(.easeInOut(duration: 0.18), value: selectedTab)
         }
-        .padding(.horizontal, AppTheme.chromePadding)
-        .padding(.bottom, AppTheme.chromePadding)
+        .padding(AppTheme.chromePadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
@@ -70,8 +75,10 @@ private struct SettingsSidebar: View {
 
             Spacer()
         }
-        .frame(width: 136)
+        .frame(width: 152)
         .frame(maxHeight: .infinity, alignment: .topLeading)
+        // Prevent any implicit animation from causing button position shifts on tab change
+        .animation(.none, value: selectedTab)
     }
 }
 
@@ -85,61 +92,70 @@ private struct SettingsSidebarButton: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
-                Text(title)
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isSelected ? AppTheme.signalTint : Color.secondary)
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .tracking(0.3)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.9)
-                Spacer()
+                Spacer(minLength: 0)
             }
             .foregroundStyle(isSelected ? Color.white : Color.primary)
             .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 36, maxHeight: 36, alignment: .leading)
             .background {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? AppTheme.primaryTint.opacity(0.78) : Color.white.opacity(0.04))
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isSelected ? AppTheme.canvasAccent.opacity(0.9) : Color.white.opacity(0.04))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(isSelected ? AppTheme.primaryTint : AppTheme.glassStroke, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(
+                                isSelected ? AppTheme.signalTint.opacity(0.50) : AppTheme.glassStroke,
+                                lineWidth: 1
+                            )
                     }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, minHeight: 36, maxHeight: 36)
     }
 }
 
 private struct SettingsCard<Content: View>: View {
     let title: String
     let subtitle: String?
+    let stretchesVertically: Bool
+    let compact: Bool
     let content: Content
 
-    init(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+    init(title: String, subtitle: String? = nil, stretchesVertically: Bool = false, compact: Bool = false, @ViewBuilder content: () -> Content) {
         self.title = title
         self.subtitle = subtitle
+        self.stretchesVertically = stretchesVertically
+        self.compact = compact
         self.content = content()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: compact ? 9 : 12) {
+            VStack(alignment: .leading, spacing: compact ? 3 : 4) {
+                Text(title.uppercased())
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(AppTheme.signalTint.opacity(0.75))
 
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.caption)
+                        .font(.system(size: compact ? 11 : 12))
                         .foregroundStyle(.secondary)
                 }
             }
 
             content
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .glassCard(cornerRadius: 18)
+        .padding(compact ? 10 : 14)
+        .frame(maxWidth: .infinity, maxHeight: stretchesVertically ? .infinity : nil, alignment: .topLeading)
+        .glassCard(cornerRadius: compact ? 12 : 16)
     }
 }
 
@@ -427,6 +443,7 @@ struct AISettingsTab: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
@@ -558,10 +575,10 @@ struct XPSettingsTab: View {
     @State private var showingResetConfirmation = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 16) {
-                SettingsCard(title: "XP Rules", subtitle: "Tune how sessions reward and penalize progress.") {
-                    VStack(alignment: .leading, spacing: 12) {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
+                SettingsCard(title: "XP Rules", subtitle: "Tune how sessions reward and penalize progress.", compact: true) {
+                    VStack(alignment: .leading, spacing: 9) {
                         LabeledContent("XP per Minute") {
                             Text("\(Int(xpPerMinute)) XP")
                                 .font(.system(.body, design: .rounded))
@@ -586,39 +603,39 @@ struct XPSettingsTab: View {
                     }
                 }
 
-                SettingsCard(title: "Ranks", subtitle: "Current defaults from config.") {
-                    VStack(alignment: .leading, spacing: 4) {
-                        RankRow(name: "Recruit", threshold: 0)
-                        RankRow(name: "Private", threshold: 100)
-                        RankRow(name: "Corporal", threshold: 300)
-                        RankRow(name: "Sergeant", threshold: 600)
-                        RankRow(name: "Staff Sergeant", threshold: 1000)
-                        RankRow(name: "Captain", threshold: 1500)
-                    }
+                SettingsCard(title: "Actions", compact: true) {
+                    HStack(spacing: 12) {
+                        Button("Save Settings") {
+                            saveXPSettings()
+                        }
+                        .disabled(isSaving)
 
-                    Text("Edit `config.json` to customize names, thresholds, and icons.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Button("Reset All XP", role: .destructive) {
+                            showingResetConfirmation = true
+                        }
+
+                        if let saveMessage, !saveMessage.isEmpty {
+                            Text(saveMessage)
+                                .font(.caption)
+                                .foregroundStyle(saveMessage.contains("Error") ? .red : .green)
+                        }
+                    }
                 }
             }
 
-            SettingsCard(title: "Actions") {
-                HStack(spacing: 12) {
-                    Button("Save Settings") {
-                        saveXPSettings()
-                    }
-                    .disabled(isSaving)
-
-                    Button("Reset All XP", role: .destructive) {
-                        showingResetConfirmation = true
-                    }
-
-                    if let saveMessage, !saveMessage.isEmpty {
-                        Text(saveMessage)
-                            .font(.caption)
-                            .foregroundStyle(saveMessage.contains("Error") ? .red : .green)
-                    }
+            SettingsCard(title: "Ranks", subtitle: "Current defaults from config.", compact: true) {
+                VStack(alignment: .leading, spacing: 4) {
+                    RankRow(name: "Recruit", threshold: 0)
+                    RankRow(name: "Private", threshold: 100)
+                    RankRow(name: "Corporal", threshold: 300)
+                    RankRow(name: "Sergeant", threshold: 600)
+                    RankRow(name: "Staff Sergeant", threshold: 1000)
+                    RankRow(name: "Captain", threshold: 1500)
                 }
+
+                Text("Edit `config.json` to customize names, thresholds, and icons.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -709,12 +726,12 @@ struct RankRow: View {
     var body: some View {
         HStack {
             Text(name)
-                .font(.system(size: 12, design: .monospaced))
-            
+                .font(.system(size: 14, design: .monospaced))
+
             Spacer()
-            
+
             Text("\(threshold) XP")
-                .font(.system(size: 12, design: .rounded))
+                .font(.system(size: 14, design: .rounded))
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 8)
@@ -823,8 +840,8 @@ struct PersonalityTab: View {
     private let bridgeURL = "http://127.0.0.1:5050"
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
                 SettingsCard(title: "Guide", subtitle: "Choose how Code Sergeant talks and judges focus.") {
                     if options.isEmpty && !isLoading {
                         Text("Connect to the bridge to load personalities.")
@@ -843,6 +860,9 @@ struct PersonalityTab: View {
                         Text(current.description)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     if selectedProfile == "custom" {
@@ -855,65 +875,71 @@ struct PersonalityTab: View {
                     }
                 }
 
-                SettingsCard(title: "Microphone", subtitle: "Wake word, push-to-talk, and note-taking use this input.") {
-                    Picker("Microphone", selection: $inputDeviceName) {
-                        Text("System Default").tag("")
-                        ForEach(inputDevices, id: \.name) { device in
-                            Text(deviceLabel(for: device)).tag(device.name)
+                SettingsCard(title: "Actions", subtitle: "This saves to `config.json` and updates future sessions.") {
+                    HStack(spacing: 12) {
+                        Button("Save Personality") {
+                            savePersonality()
                         }
-                    }
-                    .disabled(isLoadingInputs)
+                        .disabled(isSaving || options.isEmpty)
 
-                    if let resolvedInputName, !resolvedInputName.isEmpty {
-                        Text(inputDeviceName.isEmpty ? "Current default: \(resolvedInputName)" : "Selected mic: \(resolvedInputName)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let defaultInputName, !defaultInputName.isEmpty, !inputDeviceName.isEmpty {
-                        Text("System default microphone: \(defaultInputName)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 8) {
-                        Button("Refresh", action: loadInputDevices)
-                            .disabled(isLoadingInputs)
-
-                        Button("Save Mic", action: saveInputDevice)
-                            .disabled(isSavingInput || isLoadingInputs)
-
-                        if isLoadingInputs {
+                        if isLoading {
                             ProgressView()
                                 .scaleEffect(0.8)
                         }
-                    }
 
-                    if let saveInputMessage, !saveInputMessage.isEmpty {
-                        Text(saveInputMessage)
-                            .font(.caption)
-                            .foregroundStyle(saveInputMessage.contains("Error") ? .red : .green)
+                        if let saveMessage, !saveMessage.isEmpty {
+                            Text(saveMessage)
+                                .font(.caption)
+                                .foregroundStyle(saveMessage.contains("Error") ? .red : .green)
+                        }
                     }
                 }
             }
 
-            SettingsCard(title: "Actions", subtitle: "This saves to `config.json` and updates future sessions.") {
-                HStack(spacing: 12) {
-                    Button("Save Personality") {
-                        savePersonality()
+            SettingsCard(title: "Microphone", subtitle: "Wake word, voice commands, and note-taking use this input.") {
+                Picker("Microphone", selection: $inputDeviceName) {
+                    Text("System Default").tag("")
+                    ForEach(inputDevices, id: \.name) { device in
+                        Text(deviceLabel(for: device)).tag(device.name)
                     }
-                    .disabled(isSaving || options.isEmpty)
+                }
+                .disabled(isLoadingInputs)
 
-                    if isLoading {
+                if let resolvedInputName, !resolvedInputName.isEmpty {
+                    Text(inputDeviceName.isEmpty ? "Current default: \(resolvedInputName)" : "Selected mic: \(resolvedInputName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let defaultInputName, !defaultInputName.isEmpty, !inputDeviceName.isEmpty {
+                    Text("System default microphone: \(defaultInputName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                HStack(spacing: 8) {
+                    Button("Refresh", action: loadInputDevices)
+                        .disabled(isLoadingInputs)
+
+                    Button("Save Mic", action: saveInputDevice)
+                        .disabled(isSavingInput || isLoadingInputs)
+
+                    if isLoadingInputs {
                         ProgressView()
                             .scaleEffect(0.8)
                     }
+                }
 
-                    if let saveMessage, !saveMessage.isEmpty {
-                        Text(saveMessage)
-                            .font(.caption)
-                            .foregroundStyle(saveMessage.contains("Error") ? .red : .green)
-                    }
+                if let saveInputMessage, !saveInputMessage.isEmpty {
+                    Text(saveInputMessage)
+                        .font(.caption)
+                        .foregroundStyle(saveInputMessage.contains("Error") ? .red : .green)
                 }
             }
         }
@@ -1091,54 +1117,51 @@ struct AboutTab: View {
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.0.0"
     }
-    
+
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            
-            // App icon
-            Image(systemName: "shield.lefthalf.filled")
-                .font(.system(size: 64))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [AppTheme.canvasAccent, AppTheme.primaryTint],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-            
-            // App name
-            Text("Code Sergeant")
-                .font(.system(size: 24, weight: .bold))
-            
-            // Version
-            Text("Version \(appVersion)")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-            
-            // Description
-            Text("Your AI-powered productivity drill sergeant.\nStay focused. Get things done.")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Spacer()
-            
-            // Links
-            HStack(spacing: 20) {
-                Link("GitHub", destination: URL(string: "https://github.com/CuevaLabs/CodeSergeant")!)
-                Link("Documentation", destination: URL(string: "https://github.com/CuevaLabs/CodeSergeant#readme")!)
-                Link("Report Issue", destination: URL(string: "https://github.com/CuevaLabs/CodeSergeant/issues")!)
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+
+            VStack(spacing: 20) {
+                // Full brand logo — takes up a commanding amount of space
+                Image("CodeSergeantLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 260)
+                    .shadow(color: AppTheme.signalTint.opacity(0.18), radius: 28, y: 10)
+                    .accessibilityLabel("Code Sergeant logo")
+
+                Text("Version \(appVersion)")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .tracking(1.2)
+
+                Text("Your AI-powered productivity drill sergeant.\nStay focused. Get things done.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(5)
+                    .padding(.horizontal, 24)
             }
-            .font(.system(size: 12))
-            
-            // Copyright
-            Text("© 2026 Code Sergeant")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-            
-            Spacer()
+
+            Spacer(minLength: 0)
+
+            // Footer — fixed at bottom, never floats
+            VStack(spacing: 10) {
+                HStack(spacing: 24) {
+                    Link("GitHub", destination: URL(string: "https://github.com/CuevaLabs/CodeSergeant")!)
+                    Link("Docs", destination: URL(string: "https://github.com/CuevaLabs/CodeSergeant#readme")!)
+                    Link("Report Issue", destination: URL(string: "https://github.com/CuevaLabs/CodeSergeant/issues")!)
+                }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(AppTheme.signalTint.opacity(0.85))
+
+                Text("© 2026 Code Sergeant")
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .tracking(0.6)
+            }
+            .padding(.bottom, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1157,7 +1180,7 @@ struct StatusBadge: View {
                 .frame(width: 6, height: 6)
             
             Text(status)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 8)

@@ -30,7 +30,7 @@ struct XPDisplay: View {
     private var compactView: some View {
         HStack(spacing: 8) {
             Text(rankAbbreviation)
-                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .font(.system(size: 12, weight: .black, design: .monospaced))
                 .tracking(1)
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 20)
@@ -48,20 +48,20 @@ struct XPDisplay: View {
             // XP count with animation
             HStack(spacing: 2) {
                 Text("\(totalXP)")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
                     .contentTransition(.numericText())
                     .animation(.spring(response: 0.3), value: totalXP)
                 
                 Text("XP")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             
             // Session XP (if active)
             if sessionXP > 0 {
                 Text("+\(sessionXP)")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(AppTheme.successTint)
                     .transition(.scale.combined(with: .opacity))
                     .animation(.spring(response: 0.3), value: sessionXP)
@@ -78,7 +78,7 @@ struct XPDisplay: View {
         HStack(alignment: .center, spacing: 14) {
             VStack(spacing: 4) {
                 Text(currentRank.uppercased())
-                    .font(.system(size: 16, weight: .black, design: .monospaced))
+                    .font(.system(size: 18, weight: .black, design: .monospaced))
                     .tracking(1.5)
                     .foregroundStyle(
                         LinearGradient(
@@ -89,7 +89,7 @@ struct XPDisplay: View {
                     )
                 
                 Text("\(totalXP) XP")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
                     .animation(.spring(response: 0.3), value: totalXP)
@@ -109,7 +109,7 @@ struct XPDisplay: View {
                 VStack(alignment: .leading, spacing: 5) {
                     LabeledContent("Next: \(nextRankName.uppercased())") {
                         Text("\(xpToNextRank) XP")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
                             .foregroundStyle(.secondary)
                     }
                     
@@ -117,7 +117,7 @@ struct XPDisplay: View {
                         .tint(rankColor)
                     
                     Text("\(Int(rankProgress * 100))%")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

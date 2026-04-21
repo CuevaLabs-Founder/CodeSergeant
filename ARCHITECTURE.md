@@ -160,6 +160,8 @@ class ControllerState:
     wake_word: str = "hey sergeant"
 ```
 
+The dedicated note wake word is stored in `config["notes"]["wake_word"]` and defaults to `take note sergeant`.
+
 ### Activity Judge
 
 **Purpose**: Classify user activity as on-task/off-task
@@ -478,6 +480,6 @@ Architecture supports:
 | **Bridge** | HTTP server connecting Swift and Python |
 | **Judgment** | AI classification of activity |
 | **Pomodoro** | 25-minute focused work period |
-| **Wake Word** | Voice activation phrase ("Hey Sergeant") |
+| **Wake Word** | Full voice activation phrase, such as "Hey Sergeant" |
+| **Note Wake Word** | Dedicated voice note phrase, such as "Take note Sergeant" |
 | **Worker** | Background thread performing async tasks |
-

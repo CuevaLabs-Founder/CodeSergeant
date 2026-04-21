@@ -11,7 +11,6 @@ struct DashboardView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var goalText = ""
     @State private var animateIn = false
     @State private var showingEndSessionConfirmation = false
 
@@ -34,6 +33,8 @@ struct DashboardView: View {
                             remainingSeconds: appState.remainingSeconds,
                             totalSeconds: max(Int(appState.workMinutes) * 60, appState.remainingSeconds),
                             isBreak: appState.isBreak,
+                            pomodoroState: appState.pomodoroState,
+                            sessionEndedEarly: appState.sessionEndedEarly,
                             totalXP: appState.totalXP,
                             sessionXP: appState.sessionXP,
                             currentRank: appState.currentRank,
@@ -48,7 +49,7 @@ struct DashboardView: View {
                         )
                     } else {
                         StartSessionPanel(
-                            goalText: $goalText,
+                            goalText: $appState.draftGoal,
                             workMinutes: $appState.workMinutes,
                             breakMinutes: $appState.breakMinutes,
                             isStartingSession: appState.isStartingSession,
@@ -88,11 +89,24 @@ struct DashboardView: View {
                 )
                 .transition(.opacity)
             }
+
+            // XP gain toast — appears when on-task XP is awarded
+            if appState.lastXPGain > 0 {
+                XPGainToast(xpGain: appState.lastXPGain)
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .move(edge: .top).combined(with: .opacity)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+            }
         }
+        .animation(reduceMotion ? .none : .spring(response: 0.35, dampingFraction: 0.82), value: appState.lastXPGain)
         .padding(layoutPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
-            goalText = appState.sessionGoal
             if reduceMotion {
                 animateIn = true
             } else {
@@ -127,7 +141,7 @@ struct DashboardView: View {
     }
 
     private func startSession() {
-        appState.sessionGoal = goalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.sessionGoal = appState.draftGoal.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.startSession()
     }
 
@@ -153,15 +167,17 @@ private struct DashboardHeader: View {
             }
 
             VStack(alignment: .leading, spacing: isCompact ? 2 : 4) {
-                Label("Code Sergeant", systemImage: "shield.lefthalf.filled")
-                    .font((isCompact ? Font.headline : .title2).weight(.black))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [AppTheme.canvasAccent, AppTheme.primaryTint],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+                HStack(spacing: isCompact ? 8 : 10) {
+                    Image("CodeSergeantLogoInline")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: isCompact ? 28 : 34, height: isCompact ? 28 : 34)
+                        .accessibilityHidden(true)
+
+                    Text("Code Sergeant")
+                        .font((isCompact ? Font.headline : .title2).weight(.black))
+                        .foregroundStyle(.primary)
+                }
 
                 Text(isSessionActive ? "Session active" : "Ready to start")
                     .font(isCompact ? .caption : .subheadline)
@@ -272,6 +288,8 @@ private struct ActiveSessionPanel: View {
     let remainingSeconds: Int
     let totalSeconds: Int
     let isBreak: Bool
+    let pomodoroState: String
+    let sessionEndedEarly: Bool
     let totalXP: Int
     let sessionXP: Int
     let currentRank: String
@@ -290,7 +308,9 @@ private struct ActiveSessionPanel: View {
                 TimerDisplay(
                     remainingSeconds: remainingSeconds,
                     totalSeconds: totalSeconds,
-                    isBreak: isBreak
+                    isBreak: isBreak,
+                    pomodoroState: pomodoroState,
+                    sessionEndedEarly: sessionEndedEarly
                 )
                 .frame(width: 236)
 
@@ -497,7 +517,28 @@ private struct StatCard: View {
     }
 }
 
-private struct InlineConfirmationOverlay: View {
+private struct XPGainToast: View {
+    let xpGain: Int
+
+    var body: some View {
+        Label("+\(xpGain) XP", systemImage: "star.fill")
+            .font(.system(size: 15, weight: .bold, design: .rounded))
+            .foregroundStyle(AppTheme.warningTint)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background {
+                Capsule()
+                    .fill(.thinMaterial)
+                    .overlay {
+                        Capsule()
+                            .stroke(AppTheme.warningTint.opacity(0.4), lineWidth: 1)
+                    }
+            }
+            .accessibilityLabel("Gained \(xpGain) experience points")
+    }
+}
+
+struct InlineConfirmationOverlay: View {
     let title: String
     let message: String
     let confirmTitle: String

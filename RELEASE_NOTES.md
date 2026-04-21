@@ -1,14 +1,12 @@
-# Code Sergeant v1.0.0
+# Code Sergeant v2.0.0
 
-**Release Date**: January 2025
+**Release Date**: April 2026
 
 ---
 
-## Your AI Body Double for Deep Work
+## Your AI Body Double — Now With a Proper Installer
 
-If you've ever tried body doubling—having someone present while you work to help you focus—you know it works. But finding a consistent body double is hard, and Zoom coworking sessions with strangers feel weird.
-
-Code Sergeant is an AI body double that actually pays attention. It watches what you're doing, understands context, and calls you out when you drift. No strangers. No judgment. Just accountability.
+v2.0.0 ships a fully redesigned SwiftUI interface, a refactored backend, and a clean DMG installer. No Xcode required to get running.
 
 **Built for:**
 - Developers who want to ship more and scroll less
@@ -18,36 +16,45 @@ Code Sergeant is an AI body double that actually pays attention. It watches what
 
 ---
 
-## What's New in v1.0.0
+## What's New in v2.0.0
 
-### Smart Activity Monitoring
-Your AI companion knows the difference between productive work and distraction. Reading Stack Overflow while coding? That's fine. Scrolling Reddit? Time for a nudge.
+### DMG Installer
+Download `CodeSergeant-2.0.0.dmg`, drag the app to Applications, and you're running. No Xcode, no terminal, no Python setup required.
 
-- Native macOS integration (no external apps needed)
-- Context-aware judgment powered by local AI
-- Recognizes "thinking time" vs actual distraction
+### Full SwiftUI Redesign
+The entire interface was rebuilt from scratch:
 
-### Voice Interaction
-Talk to your AI body double like it's actually there.
+- **Glass card layout** — clean layered panels for each view
+- **Liquid buttons** — animated interactive controls
+- **Dashboard view** — all session info in a single focused panel
+- **XP and rank system** — earn XP during focus sessions, watch the rank climb
+- **Warning strobe overlay** — full-screen visual flash when drift is detected
 
-- **Wake word**: "Hey Sergeant" (customizable per personality)
-- **Voice notes**: Capture thoughts without touching the keyboard
-- **Spoken feedback**: Hear warnings, encouragement, session summaries
+### Voice Note Recording
+Say "Take note Sergeant" at any time to capture a hands-free note. The audio is transcribed automatically and saved with the session.
 
-### Multiple Personalities
-Not everyone responds to drill sergeant energy. Pick your vibe:
-
-- **Sergeant** - Strict, no-nonsense, military motivation
-- **Buddy** - Supportive friend who's got your back
-- **Advisor** - Calm, professional guidance
-- **Coach** - Energetic hype person
-
-### Privacy First
-Your focus struggles stay on your machine. All AI processing can run locally via Ollama—no data sent to the cloud unless you choose to use OpenAI or ElevenLabs.
+### Backend Refactor
+- AppController rewritten for cleaner session lifecycle management
+- Voice worker rebuilt — more reliable wake phrase detection, fewer false triggers
+- TTS updated with better ElevenLabs integration and fallback handling
+- Bridge server expanded with new REST endpoints for all SwiftUI panels
 
 ---
 
-## Quick Install
+## Install (DMG — Recommended)
+
+1. Download `CodeSergeant-2.0.0.dmg` from the [Releases page](https://github.com/CuevaLabs/CodeSergeant/releases)
+2. Open the DMG and drag **Code Sergeant** to your Applications folder
+3. Launch from Applications or Spotlight
+4. Grant **Accessibility** and **Microphone** permissions when prompted
+
+> Code Sergeant needs these permissions to read active window titles and listen for wake phrases. Both are granted through System Settings → Privacy & Security.
+
+---
+
+## Install (Build from Source)
+
+For developers who want to run the full stack locally:
 
 ```bash
 git clone https://github.com/CuevaLabs/CodeSergeant.git
@@ -57,14 +64,13 @@ pip install -r requirements.txt
 open CodeSergeantUI/CodeSergeantUI.xcodeproj
 ```
 
-For smarter AI, install [Ollama](https://ollama.ai/) and run `ollama pull llama3.2`.
+Build and run the `CodeSergeantUI` target in Xcode. For smarter AI judgment, install [Ollama](https://ollama.ai/) and run `ollama pull llama3.2`.
 
 ---
 
 ## Requirements
 
-- macOS 12+ (Monterey or later)
-- Python 3.10+
+- macOS 13+ (Ventura or later) for v2.0.0
 - Ollama or OpenAI API key (optional but recommended)
 - ElevenLabs API key (optional, for premium voices)
 
@@ -72,7 +78,7 @@ For smarter AI, install [Ollama](https://ollama.ai/) and run `ollama pull llama3
 
 ## Known Limitations
 
-- macOS only for now (Windows/Linux on the roadmap)
+- macOS only for now
 - Wake word can false-trigger in noisy environments
 - First launch takes a few seconds while models load
 
@@ -80,21 +86,18 @@ For smarter AI, install [Ollama](https://ollama.ai/) and run `ollama pull llama3
 
 ## What's Coming
 
-- Analytics dashboard to track your focus patterns
+- Analytics dashboard to track focus patterns
 - Session history visualization
 - iOS companion app
-- Cross-platform support
 - Community-requested personalities
 
 ---
 
 ## Join the Community
 
-Building something with Code Sergeant? Have focus tips that actually work? Found a bug?
-
-- **Discord**: Coming soon
-- **Twitter/X**: Share your wins with #CodeSergeant
+- **Twitter/X**: Share your wins with [#CodeSergeant](https://x.com/search?q=%23CodeSergeant)
 - **GitHub Issues**: Bug reports and feature requests welcome
+- **Follow**: [@cuevalabsdev](https://x.com/cuevalabsdev) for updates
 
 ---
 

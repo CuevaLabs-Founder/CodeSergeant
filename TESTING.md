@@ -131,8 +131,10 @@ pytest -v --tb=long
 
 - [ ] TTS speaks warnings
 - [ ] TTS can be stopped
-- [ ] Wake word detection works ("Hey Sergeant")
-- [ ] Voice notes can be recorded
+- [ ] Full wake phrase detection works ("Hey Sergeant")
+- [ ] Partial wake phrases are ignored ("Sergeant" alone)
+- [ ] Dedicated note wake phrase works ("Take note Sergeant")
+- [ ] Voice notes can be recorded and transcribed
 
 ### Settings
 
@@ -404,4 +406,3 @@ class TestNewFeature:
         # Test implementation
         assert result is not None
 ```
-

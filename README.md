@@ -8,11 +8,12 @@
 
 **An AI-powered productivity companion that keeps you focused during deep work.**
 
-[Features](#features) | [Quick Start](#quick-start) | [Documentation](#documentation) | [Contributing](#contributing)
+[Features](#features) | [Install](#installation) | [Documentation](#documentation) | [Contributing](#contributing)
 
 </div>
 
 ---
+
 ## Showcase
 
 <div align="center">
@@ -22,11 +23,11 @@
 <table>
   <tr>
     <td width="50%"><img src="assets/readme/01-no-active-session.png" alt="No active session" width="100%"></td>
-    <td width="50%"><img src="assets/readme/02-session-setup-empty.png" alt="Empty session setup" width="100%"></td>
+    <td width="50%"><img src="assets/readme/02-session-setup.png" alt="Session setup" width="100%"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="assets/readme/03-session-setup-filled.png" alt="Filled session setup" width="100%"></td>
-    <td width="50%"><img src="assets/readme/04-active-session.png" alt="Active session" width="100%"></td>
+    <td width="50%"><img src="assets/readme/03-active-session.png" alt="Active session" width="100%"></td>
+    <td width="50%"><img src="assets/readme/08-about.png" alt="About screen" width="100%"></td>
   </tr>
 </table>
 
@@ -34,22 +35,14 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/readme/05-settings-ai.png" alt="AI settings" width="100%"></td>
-    <td width="50%"><img src="assets/readme/06-settings-xp.png" alt="XP settings" width="100%"></td>
+    <td width="50%"><img src="assets/readme/04-settings-ai.png" alt="AI settings" width="100%"></td>
+    <td width="50%"><img src="assets/readme/05-settings-xp.png" alt="XP settings" width="100%"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="assets/readme/07-settings-monitor.png" alt="Monitor settings" width="100%"></td>
-    <td width="50%"><img src="assets/readme/08-settings-personality.png" alt="Personality settings" width="100%"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="assets/readme/09-personality-dropdown.png" alt="Personality dropdown" width="100%"></td>
-    <td width="50%"><img src="assets/readme/10-mic-dropdown.png" alt="Microphone dropdown" width="100%"></td>
+    <td width="50%"><img src="assets/readme/06-settings-monitor.png" alt="Monitor settings" width="100%"></td>
+    <td width="50%"><img src="assets/readme/07-settings-personality.png" alt="Personality settings" width="100%"></td>
   </tr>
 </table>
-
-<p><strong>About</strong></p>
-
-<img src="assets/readme/11-about.png" alt="About screen" width="100%">
 
 </div>
 
@@ -76,7 +69,8 @@ Code Sergeant is what came out: a privacy-first AI companion that actually under
 - **Context-aware judgment** - Knows Stack Overflow is productive when you're coding
 - **100% local processing** - Your data never leaves your machine
 - **Multiple personalities** - From drill sergeant to supportive buddy
-- **Voice interaction** - Say "Hey Sergeant" to chat hands-free
+- **Voice interaction** - Say the full wake phrase "Hey Sergeant" to chat hands-free
+- **Voice notes** - Say "Take note Sergeant" to capture thoughts without touching the keyboard
 - **Native macOS integration** - SwiftUI menu bar app backed by native macOS monitoring APIs
 
 ---
@@ -93,10 +87,17 @@ Code Sergeant is what came out: a privacy-first AI companion that actually under
 - Voice announcements for transitions
 - Track completed pomodoros per session
 
+### XP & Rank System
+- Earn XP for every completed focus block
+- Watch your rank climb as sessions accumulate
+- Animated XP display and visual level-up tracking
+
 ### Voice Interaction
-- **Wake Word** - Say "Hey Sergeant" (or your personality's wake word) to interact
-- **Voice Notes** - Capture thoughts hands-free, automatically transcribed
+- **Wake Word** - Say the full phrase "Hey Sergeant" (or your personality's wake word) to interact. "Sergeant" by itself is ignored.
+- **Voice Notes** - Say "Take note Sergeant" to capture a hands-free note, automatically transcribed
 - **Text-to-Speech** - Hear warnings, encouragement, and session summaries
+
+Outside an active focus session, Code Sergeant only opens the mic after a full wake phrase such as "Hey Sergeant" or the dedicated note phrase "Take note Sergeant". During an active session, it can also speak focus warnings, timer updates, and session summaries.
 
 ### Multiple Personalities
 Choose your motivation style:
@@ -147,37 +148,59 @@ Choose your motivation style:
 
 ---
 
-## Quick Start
+## Installation
 
-### Requirements
+### Option 1: DMG Installer (Recommended)
 
-- macOS 12 (Monterey) or later
+No Xcode or Python required.
+
+1. Download `CodeSergeant-2.0.0.dmg` from the [Releases page](https://github.com/CuevaLabs/CodeSergeant/releases)
+2. Open the DMG and drag **Code Sergeant** to your **Applications** folder
+3. Launch Code Sergeant from Applications or Spotlight
+4. Grant **Accessibility** and **Microphone** permissions when prompted
+
+> Both permissions are granted through **System Settings → Privacy & Security**. Accessibility lets the app read window titles; Microphone enables wake word and voice note features.
+
+### Option 2: Build from Source
+
+For developers who want to modify the stack or run without the DMG.
+
+**Requirements**
+
+- macOS 13 (Ventura) or later
 - Python 3.10+
+- Xcode 15+
 - [Ollama](https://ollama.ai/) (optional but recommended)
-
-### Installation
 
 ```bash
 # Clone the repository
 git clone https://github.com/CuevaLabs/CodeSergeant.git
 cd CodeSergeant
 
-# Create virtual environment
+# Create virtual environment and install Python dependencies
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 
 # (Optional) Install Ollama for AI-powered judgment
 # Download from https://ollama.ai/, then:
 ollama pull llama3.2
 
-# Run the SwiftUI app
+# Open the Xcode project
 open CodeSergeantUI/CodeSergeantUI.xcodeproj
 ```
 
-Build and run `CodeSergeantUI` in Xcode. The app appears in your menu bar and automatically starts the Python bridge server.
+Build and run the `CodeSergeantUI` target in Xcode. The app appears in your menu bar and automatically starts the Python bridge server.
+
+---
+
+## Quick Start
+
+1. Click the Code Sergeant icon in your menu bar
+2. Click **Start Focus Session**
+3. Enter your goal (e.g., "Implement the login feature")
+4. Work — Code Sergeant monitors your active app and window titles
+5. When you drift, it speaks up
 
 ---
 
@@ -203,6 +226,13 @@ Configuration is stored in `config.json`:
   "cooldown_seconds": 30,
   "personality": {
     "name": "sergeant"
+  },
+  "voice_activation": {
+    "enabled": true,
+    "sensitivity": 0.5
+  },
+  "notes": {
+    "wake_word": "take note sergeant"
   },
   "ollama": {
     "model": "llama3.2",
@@ -234,9 +264,9 @@ Code Sergeant needs these macOS permissions:
 | Permission | Purpose |
 |------------|---------|
 | Accessibility | Reading window titles for activity monitoring |
-| Microphone | Voice commands and note recording |
+| Microphone | Wake word detection, voice commands, and note recording |
 
-Grant via: System Settings → Privacy & Security
+Grant via: **System Settings → Privacy & Security**
 
 ---
 
@@ -257,12 +287,20 @@ pytest --cov=code_sergeant --cov-report=html
 
 ## Roadmap
 
-**v1.0.0** (Current)
+**v1.0.0** — Initial release
 - Native macOS activity monitoring
 - Local LLM integration (Ollama)
 - Voice feedback and commands
 - Pomodoro timer
 - SwiftUI menu bar app
+
+**v2.0.0** (Current)
+- Complete SwiftUI redesign (glass cards, liquid buttons)
+- XP and rank system
+- Warning strobe overlay
+- Voice note recording
+- Refactored AppController and voice worker
+- DMG installer
 
 **Planned**
 - Analytics dashboard
@@ -289,7 +327,6 @@ pytest  # Verify setup
 
 Building something with Code Sergeant? Have ADHD productivity tips to share? Found a bug?
 
-
 - **Twitter/X**: Follow [@cuevalabsdev](https://x.com/cuevalabsdev) for updates
 - **GitHub Issues**: Bug reports and feature requests welcome
 
@@ -299,7 +336,7 @@ This started as a personal tool to solve my own focus problems. If it helps you 
 
 ## About This Project
 
-This project was developed with assistance from AI tools (Cursor) for code suggestions and rapid iteration. All architecture decisions, creative direction, and refinements were human-led. I believe in transparency about AI-assisted development—it's a tool that amplifies productivity, not a replacement for thoughtful engineering.
+This project was developed with assistance from AI tools for code suggestions and rapid iteration. All architecture decisions, creative direction, and refinements were human-led. I believe in transparency about AI-assisted development—it's a tool that amplifies productivity, not a replacement for thoughtful engineering.
 
 ---
 

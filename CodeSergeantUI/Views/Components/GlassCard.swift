@@ -17,17 +17,19 @@ enum AppTheme {
     static let cardPadding: CGFloat = 16
     static let compactSpacing: CGFloat = 12
     static let controlMinHeight: CGFloat = 42
-    
-    static let canvasTop = Color(red: 0.13, green: 0.16, blue: 0.19)
-    static let canvasBottom = Color(red: 0.08, green: 0.10, blue: 0.12)
-    static let canvasAccent = Color(red: 0.33, green: 0.41, blue: 0.28)
-    static let primaryTint = Color(red: 0.31, green: 0.53, blue: 0.66)
-    static let successTint = Color(red: 0.34, green: 0.56, blue: 0.42)
-    static let dangerTint = Color(red: 0.70, green: 0.32, blue: 0.26)
-    static let warningTint = Color(red: 0.75, green: 0.58, blue: 0.25)
-    static let glassStroke = Color.white.opacity(0.18)
-    static let glassHighlight = Color.white.opacity(0.08)
-    static let panelShadow = Color.black.opacity(0.16)
+
+    // Dark military green base — mirrors the site palette exactly
+    static let canvasTop    = Color(red: 0.094, green: 0.125, blue: 0.086)  // #182016
+    static let canvasBottom = Color(red: 0.059, green: 0.078, blue: 0.051)  // #0f140d
+    static let canvasAccent = Color(red: 0.267, green: 0.329, blue: 0.227)  // #44543a camo dark
+    static let primaryTint  = Color(red: 0.416, green: 0.498, blue: 0.298)  // #6a7f4c camo olive
+    static let signalTint   = Color(red: 0.827, green: 1.000, blue: 0.451)  // #d3ff73 lime signal
+    static let successTint  = Color(red: 0.353, green: 0.478, blue: 0.259)  // #5a7a42
+    static let dangerTint   = Color(red: 0.700, green: 0.320, blue: 0.260)  // #b35242
+    static let warningTint  = Color(red: 1.000, green: 0.561, blue: 0.353)  // #ff8f5a site warning
+    static let glassStroke  = Color(red: 0.671, green: 0.722, blue: 0.576).opacity(0.18) // warm olive border
+    static let glassHighlight = Color.white.opacity(0.05)
+    static let panelShadow  = Color.black.opacity(0.22)
 }
 
 // MARK: - Glass Card Modifier
@@ -54,8 +56,9 @@ struct GlassCard: ViewModifier {
                     .stroke(
                         LinearGradient(
                             colors: [
+                                AppTheme.signalTint.opacity(0.12 * borderOpacity),
                                 AppTheme.glassStroke.opacity(borderOpacity),
-                                Color.white.opacity(0.04),
+                                Color.white.opacity(0.03),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -128,26 +131,27 @@ struct GlassBackground: View {
     
     var body: some View {
         ZStack {
+            // Dark military green base gradient — mirrors site linear-gradient
             LinearGradient(
                 colors: [AppTheme.canvasTop, AppTheme.canvasBottom],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            RadialGradient(
-                colors: [AppTheme.canvasAccent.opacity(0.32), .clear],
-                center: .topLeading,
-                startRadius: 40,
-                endRadius: 420
-            )
-
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.05),
-                    Color.clear
-                ],
                 startPoint: .top,
                 endPoint: .bottom
+            )
+
+            // Lime signal glow at top — mirrors site radial-gradient at top
+            RadialGradient(
+                colors: [AppTheme.signalTint.opacity(0.10), .clear],
+                center: .top,
+                startRadius: 0,
+                endRadius: 280
+            )
+
+            // Warm amber accent top-right — mirrors site radial at 80% 20%
+            RadialGradient(
+                colors: [AppTheme.warningTint.opacity(0.07), .clear],
+                center: UnitPoint(x: 0.88, y: 0.08),
+                startRadius: 0,
+                endRadius: 180
             )
 
             Rectangle()
@@ -172,10 +176,10 @@ struct AnimatedGlassBorder: ViewModifier {
                     .stroke(
                         AngularGradient(
                             gradient: Gradient(colors: [
-                                AppTheme.primaryTint.opacity(0.55),
+                                AppTheme.signalTint.opacity(0.55),
                                 AppTheme.canvasAccent.opacity(0.55),
-                                Color.white.opacity(0.5),
-                                AppTheme.primaryTint.opacity(0.55)
+                                Color.white.opacity(0.4),
+                                AppTheme.signalTint.opacity(0.55)
                             ]),
                             center: .center,
                             startAngle: .degrees(animationProgress * 360),

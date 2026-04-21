@@ -104,102 +104,106 @@ private struct HomePanel: View {
     @State private var showingEndSessionConfirmation = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MenuBarHeader(
-                isSessionActive: appState.isSessionActive,
-                currentRank: appState.currentRank
-            )
-            .padding(AppTheme.chromePadding)
+        ZStack {
+            VStack(alignment: .leading, spacing: 0) {
+                MenuBarHeader(
+                    isSessionActive: appState.isSessionActive,
+                    currentRank: appState.currentRank,
+                    totalXP: appState.totalXP,
+                    rankProgress: appState.rankProgress,
+                    nextRankName: appState.nextRankName,
+                    xpToNextRank: appState.xpToNextRank
+                )
+                .padding(AppTheme.chromePadding)
 
-            Divider()
+                Divider()
 
-            VStack(alignment: .leading, spacing: 10) {
-                if appState.isSessionActive {
-                    HStack(alignment: .top, spacing: 12) {
-                        XPDisplay(
-                            totalXP: appState.totalXP,
-                            sessionXP: appState.sessionXP,
-                            currentRank: appState.currentRank,
-                            rankProgress: appState.rankProgress,
-                            nextRankName: appState.nextRankName,
-                            xpToNextRank: appState.xpToNextRank,
-                            isCompact: true
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 10) {
+                    if appState.isSessionActive {
+                        HStack(alignment: .top, spacing: 12) {
+                            XPDisplay(
+                                totalXP: appState.totalXP,
+                                sessionXP: appState.sessionXP,
+                                currentRank: appState.currentRank,
+                                rankProgress: appState.rankProgress,
+                                nextRankName: appState.nextRankName,
+                                xpToNextRank: appState.xpToNextRank,
+                                isCompact: true
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                        CompactTimerDisplay(
-                            remainingSeconds: appState.remainingSeconds,
-                            isBreak: appState.isBreak
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                            CompactTimerDisplay(
+                                remainingSeconds: appState.remainingSeconds,
+                                isBreak: appState.isBreak
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
 
-                    if !appState.sessionGoal.isEmpty {
-                        HoverGlassCard(cornerRadius: 16) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Label("Current mission", systemImage: "target")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                        if !appState.sessionGoal.isEmpty {
+                            HoverGlassCard(cornerRadius: 16) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Label("Current mission", systemImage: "target")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
 
-                                Text(appState.sessionGoal)
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(2)
+                                    Text(appState.sessionGoal)
+                                        .font(.subheadline.weight(.semibold))
+                                        .lineLimit(2)
+                                }
+                                .padding(14)
                             }
-                            .padding(14)
                         }
-                    }
-                } else {
-                    ContentUnavailableView(
-                        "No Active Session",
-                        systemImage: "moon.zzz.fill",
-                        description: Text("Start a focus session to track time, XP, and warnings.")
-                    )
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                }
-            }
-            .padding(AppTheme.chromePadding)
-
-            Divider()
-
-            VStack(spacing: 8) {
-                if appState.isSessionActive {
-                    HStack(spacing: 8) {
-                        MenuBarButton(
-                            title: "Session View",
-                            icon: "rectangle.portrait.on.rectangle.portrait.fill",
-                            tint: AppTheme.primaryTint
-                        ) {
-                            appState.showSession()
-                        }
-
-                        MenuBarButton(
-                            title: appState.isPaused ? "Resume" : "Pause",
-                            icon: appState.isPaused ? "play.fill" : "pause.fill",
-                            tint: AppTheme.primaryTint,
-                            action: pauseOrResume
+                    } else {
+                        ContentUnavailableView(
+                            "No Active Session",
+                            systemImage: "moon.zzz.fill",
+                            description: Text("Start a focus session to track time, XP, and warnings.")
                         )
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
                     }
+                }
+                .padding(AppTheme.chromePadding)
 
-                    HStack(spacing: 8) {
-                        if appState.isBreak {
+                Divider()
+
+                VStack(spacing: 8) {
+                    if appState.isSessionActive {
+                        HStack(spacing: 8) {
                             MenuBarButton(
-                                title: "Skip Break",
-                                icon: "forward.fill",
-                                tint: AppTheme.successTint,
-                                action: appState.skipBreak
+                                title: "Session View",
+                                icon: "rectangle.portrait.on.rectangle.portrait.fill",
+                                tint: AppTheme.primaryTint
+                            ) {
+                                appState.showSession()
+                            }
+
+                            MenuBarButton(
+                                title: appState.isPaused ? "Resume" : "Pause",
+                                icon: appState.isPaused ? "play.fill" : "pause.fill",
+                                tint: AppTheme.primaryTint,
+                                action: pauseOrResume
                             )
                         }
 
-                        MenuBarButton(
-                            title: "Settings",
-                            icon: "gearshape.fill",
-                            tint: AppTheme.canvasAccent
-                        ) {
-                            appState.showSettings()
-                        }
+                        HStack(spacing: 8) {
+                            if appState.isBreak {
+                                MenuBarButton(
+                                    title: "Skip Break",
+                                    icon: "forward.fill",
+                                    tint: AppTheme.successTint,
+                                    action: appState.skipBreak
+                                )
+                            }
 
-                        if !appState.isBreak {
+                            MenuBarButton(
+                                title: "Settings",
+                                icon: "gearshape.fill",
+                                tint: AppTheme.canvasAccent
+                            ) {
+                                appState.showSettings()
+                            }
+
                             MenuBarButton(
                                 title: "Quit Session",
                                 icon: "stop.fill",
@@ -208,60 +212,58 @@ private struct HomePanel: View {
                                 showingEndSessionConfirmation = true
                             }
                         }
+                    } else {
+                        HStack(spacing: 8) {
+                            MenuBarButton(
+                                title: "Start Focus Session",
+                                icon: "play.fill",
+                                tint: AppTheme.primaryTint
+                            ) {
+                                appState.showSession()
+                            }
+
+                            MenuBarButton(
+                                title: "Settings",
+                                icon: "gearshape.fill",
+                                tint: AppTheme.canvasAccent
+                            ) {
+                                appState.showSettings()
+                            }
+                        }
                     }
 
-                    if appState.isBreak {
-                        MenuBarButton(
-                            title: "Quit Session",
-                            icon: "stop.fill",
-                            tint: AppTheme.dangerTint
-                        ) {
-                            showingEndSessionConfirmation = true
-                        }
-                    }
-                } else {
-                    HStack(spacing: 8) {
-                        MenuBarButton(
-                            title: "Start Focus Session",
-                            icon: "play.fill",
-                            tint: AppTheme.primaryTint
-                        ) {
-                            appState.showSession()
-                        }
-
-                        MenuBarButton(
-                            title: "Settings",
-                            icon: "gearshape.fill",
-                            tint: AppTheme.canvasAccent
-                        ) {
-                            appState.showSettings()
-                        }
+                    MenuBarButton(
+                        title: "Quit App",
+                        icon: "power",
+                        tint: AppTheme.warningTint
+                    ) {
+                        NSApplication.shared.terminate(nil)
                     }
                 }
+                .padding(AppTheme.chromePadding)
+            }
+            .background(.thinMaterial)
+            .disabled(showingEndSessionConfirmation)
+            .blur(radius: showingEndSessionConfirmation ? 2 : 0)
 
-                MenuBarButton(
-                    title: "Quit App",
-                    icon: "power",
-                    tint: AppTheme.warningTint
-                ) {
-                    NSApplication.shared.terminate(nil)
-                }
+            if showingEndSessionConfirmation {
+                InlineConfirmationOverlay(
+                    title: "Quit session early?",
+                    message: "Ending now applies your configured early-exit XP penalty.",
+                    confirmTitle: "Quit Session",
+                    confirmStyle: .danger,
+                    onConfirm: {
+                        showingEndSessionConfirmation = false
+                        appState.endSession(early: true)
+                    },
+                    onCancel: {
+                        showingEndSessionConfirmation = false
+                    }
+                )
+                .transition(.opacity)
             }
-            .padding(AppTheme.chromePadding)
         }
-        .background(.thinMaterial)
-        .confirmationDialog(
-            "Quit session early?",
-            isPresented: $showingEndSessionConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Quit Session", role: .destructive) {
-                appState.endSession(early: true)
-            }
-            Button("Keep Going", role: .cancel) {}
-        } message: {
-            Text("Ending now applies your configured early-exit XP penalty.")
-        }
+        .animation(.easeInOut(duration: 0.18), value: showingEndSessionConfirmation)
     }
 
     private func pauseOrResume() {
@@ -286,49 +288,152 @@ private struct SettingsPanelContainer: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Settings")
                         .font(.headline)
-                    Text("Everything stays in the menu bar now.")
+                    Text("Configure your drill sergeant.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
             }
+            .frame(height: AppTheme.controlMinHeight)
             .padding(.horizontal, AppTheme.chromePadding)
             .padding(.top, AppTheme.chromePadding)
             .padding(.bottom, 8)
+            .animation(.none)
 
             SettingsView()
                 .environmentObject(appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
 private struct MenuBarHeader: View {
     let isSessionActive: Bool
     let currentRank: String
+    let totalXP: Int
+    let rankProgress: Double
+    let nextRankName: String
+    let xpToNextRank: Int
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "shield.lefthalf.filled")
-                .font(.title2.weight(.bold))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [AppTheme.canvasAccent, AppTheme.primaryTint],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+            Image("CodeSergeantLogoInline")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 36, height: 36)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Code Sergeant")
                     .font(.headline)
 
-                Text(isSessionActive ? "Active • \(currentRank)" : "Ready • \(currentRank)")
+                Text(isSessionActive ? "Active" : "Ready")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
 
-            Spacer()
+            RankProgressBadge(
+                currentRank: currentRank,
+                totalXP: totalXP,
+                rankProgress: rankProgress,
+                nextRankName: nextRankName,
+                xpToNextRank: xpToNextRank
+            )
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+private struct RankProgressBadge: View {
+    let currentRank: String
+    let totalXP: Int
+    let rankProgress: Double
+    let nextRankName: String
+    let xpToNextRank: Int
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            // Left: CORPORAL · 425 XP
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(currentRank.uppercased())
+                    .font(.system(size: 14, weight: .black, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(rankColor)
+                    .lineLimit(1)
+
+                Text("·")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.tertiary)
+
+                Text("\(totalXP) XP")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .contentTransition(.numericText())
+                    .animation(.spring(response: 0.3), value: totalXP)
+            }
+            .fixedSize()
+
+            // Centre: expanding progress bar
+            ProgressView(value: rankProgress)
+                .tint(rankColor)
+                .frame(maxWidth: .infinity)
+                .animation(.spring(response: 0.45, dampingFraction: 0.8), value: rankProgress)
+
+            // Right: SERGEANT · 175 XP  (or MAX at top rank)
+            if xpToNextRank > 0 {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("\(xpToNextRank) XP")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .contentTransition(.numericText())
+                        .animation(.spring(response: 0.3), value: xpToNextRank)
+
+                    Text("·")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.tertiary)
+
+                    Text(nextRankName.uppercased())
+                        .font(.system(size: 14, weight: .black, design: .monospaced))
+                        .tracking(0.6)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .fixedSize()
+            } else {
+                Text("MAX RANK")
+                    .font(.system(size: 14, weight: .black, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(rankColor)
+                    .fixedSize()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(rankColor.opacity(0.08))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(rankColor.opacity(0.22), lineWidth: 1)
+                }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Rank \(currentRank), \(totalXP) XP. \(xpToNextRank > 0 ? "\(xpToNextRank) XP to \(nextRankName)" : "Maximum rank reached")")
+    }
+
+    private var rankColor: Color {
+        switch currentRank.lowercased() {
+        case "recruit":        return .gray
+        case "private":        return AppTheme.primaryTint
+        case "corporal":       return AppTheme.canvasAccent
+        case "sergeant":       return AppTheme.successTint
+        case "staff sergeant": return AppTheme.warningTint
+        case "captain":        return AppTheme.dangerTint
+        default:               return .white
         }
     }
 }
@@ -345,11 +450,11 @@ private struct MenuBarButton: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(tint)
 
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
 
                 Spacer(minLength: 0)

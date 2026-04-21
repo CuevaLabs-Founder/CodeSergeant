@@ -29,8 +29,15 @@ Voice commands require microphone access:
    
 2. **Test voice**
    - Start a session
-   - Click "Talk to Sergeant" or say "Hey Sergeant"
+   - Say the full phrase "Hey Sergeant"
    - Speak clearly and wait for the response
+
+3. **Test voice notes**
+   - Say the full phrase "Take note Sergeant"
+   - Wait for "Go ahead."
+   - Dictate the note and pause for the recording to finish
+
+Code Sergeant should ignore partial phrases like "Sergeant" by itself. If it opens the mic after a partial phrase, check the bridge logs for the transcript that matched.
 
 ## AI/LLM Issues
 
@@ -116,4 +123,3 @@ This can happen if the polling interval is too aggressive. Edit `config.json`:
   "judge_interval_sec": 15
 }
 ```
-

@@ -1,4 +1,5 @@
 """AppController - manages session state and coordinates workers."""
+
 import logging
 import os
 import queue
@@ -115,6 +116,8 @@ class AppController:
             rate=self.config["tts"].get("rate", 150),
             volume=self.config["tts"].get("volume", 0.8),
             optimize_for_speed=self.config["tts"].get("optimize_for_speed", False),
+            music_ducking=self.config["tts"].get("music_ducking", True),
+            duck_volume=self.config["tts"].get("duck_volume", 20),
         )
         self.tts_service.start()
 
@@ -132,6 +135,8 @@ class AppController:
         # Note recorder — Whisper base model loaded on first use
         self._note_whisper_model = None
         self._taking_note: bool = False  # Suppresses off-task judgment during dictation
+        self._last_wake_phrase_time: Optional[float] = None
+        self._wake_phrase_authorization_seconds = 30.0
 
         # Wake word detector
         self.wake_word_detector: Optional[WakeWordDetector] = None
@@ -146,7 +151,9 @@ class AppController:
             if started:
                 logger.info("Wake word detection started on initialization")
             else:
-                logger.warning("Wake word detection is enabled in config but unavailable")
+                logger.warning(
+                    "Wake word detection is enabled in config but unavailable"
+                )
 
         # Session state
         self.current_activity: Optional[ActivityEvent] = None
@@ -160,6 +167,9 @@ class AppController:
         self.drill_interval = (
             1.0  # Drill every 1 second when off_task for fast response
         )
+
+        # Guard so pomodoro callbacks don't double-announce when end_session() stops the timer
+        self._session_ending = False
 
         # Initialize motivation monitor
         self.motivation_monitor = MotivationMonitor(
@@ -225,7 +235,9 @@ class AppController:
 
         self.wake_word_detector.sensitivity = voice_activation.get("sensitivity", 0.5)
         self.wake_word_detector.set_wake_words([self.personality_manager.wake_word])
-        note_wake_word = self.config.get("notes", {}).get("wake_word", "take note sergeant")
+        note_wake_word = self.config.get("notes", {}).get(
+            "wake_word", "take note sergeant"
+        )
         self.wake_word_detector.set_note_wake_words([note_wake_word])
         self.wake_word_detector.set_input_device(input_device_name)
 
@@ -238,6 +250,7 @@ class AppController:
     def _on_wake_word_detected(self, wake_word: str):
         """Handle wake word detection."""
         logger.info(f"Wake word detected: {wake_word}")
+        self._last_wake_phrase_time = time.time()
         self.event_queue.put(
             {
                 "type": "wake_word_detected",
@@ -246,11 +259,12 @@ class AppController:
             }
         )
         # Automatically start voice interaction
-        self.start_voice_interaction()
+        self.start_voice_interaction(triggered_by_wake_word=True)
 
     def _on_note_taking_triggered(self, wake_word: str):
         """Handle note-taking wake word detection (e.g., 'hey sergeant take a note')."""
         logger.info(f"Note-taking triggered via wake word: {wake_word}")
+        self._last_wake_phrase_time = time.time()
         self.event_queue.put(
             {
                 "type": "note_taking_triggered",
@@ -259,7 +273,7 @@ class AppController:
             }
         )
         # Start note-taking mode (longer recording)
-        self.start_note_taking()
+        self.start_note_taking(triggered_by_wake_word=True)
 
     def _on_pomodoro_tick(self, state: PomodoroState):
         """Handle pomodoro tick event."""
@@ -277,8 +291,15 @@ class AppController:
             self.tts_service.speak("Time for a short break!")
         elif new_state == "long_break":
             self.tts_service.speak("Great work! Time for a long break!")
-        elif new_state == "stopped" and old_state in ("short_break", "long_break"):
-            self.tts_service.speak("Break over! Ready for another round?")
+        elif new_state == "stopped" and old_state in (
+            "work",
+            "short_break",
+            "long_break",
+        ):
+            if not self._session_ending and self.state.session_active:
+                # Pomodoro cycle finished — auto-end the session.
+                # Dispatch via event queue to avoid deadlocking on the pomodoro lock.
+                self.event_queue.put({"type": "auto_end_session"})
 
     def _on_pomodoro_complete(self, period_type: str):
         """Handle pomodoro period completion."""
@@ -363,12 +384,12 @@ class AppController:
             {"early": False, "distractions": 0, "goal": "work"},
             {"early": False, "distractions": 3, "goal": "project"},
         ]
-        
+
         for scenario in common_scenarios:
             context = {
                 **scenario,
                 "personality": self.state.personality_name,
-                "session_duration_minutes": 25  # Default estimate
+                "session_duration_minutes": 25,  # Default estimate
             }
             key = f"{scenario['early']}_{scenario['distractions']}_{scenario['goal'][:10]}"
             try:
@@ -381,10 +402,10 @@ class AppController:
     def end_session(self, early: bool = False) -> Dict[str, Any]:
         """
         End the current session and stop all workers.
-        
+
         Args:
             early: If True, apply early end XP penalty
-            
+
         Returns:
             Dict with session summary including XP info
         """
@@ -398,6 +419,9 @@ class AppController:
         stats = self.state.stats
         focus_minutes = int(stats.focus_seconds / 60) if stats else 0
         distractions = stats.distractions_count if stats else 0
+
+        # Guard against re-entrant auto_end_session from pomodoro callbacks
+        self._session_ending = True
 
         # Signal workers to stop
         self.stop_event.set()
@@ -413,7 +437,7 @@ class AppController:
             self.wake_word_detector.stop()
             self.state.wake_word_active = False
 
-        # Stop pomodoro
+        # Stop pomodoro (may fire _on_pomodoro_state_change; _session_ending guards it)
         self.pomodoro.stop()
 
         # Stop motivation monitor
@@ -422,8 +446,14 @@ class AppController:
         # Stop screen monitor
         self.screen_monitor.stop()
 
-        # Wait for workers to stop (with timeout)
+        # Wait for workers to stop (with timeout).
+        # Skip the current thread to avoid self-join when end_session is
+        # called from within the event_processor thread via auto_end_session.
+        current_thread = threading.current_thread()
         for name, worker in self.workers.items():
+            if worker is current_thread:
+                logger.debug(f"Skipping self-join for worker {name}")
+                continue
             if worker.is_alive():
                 logger.info(f"Waiting for worker {name} to stop...")
                 worker.join(timeout=5.0)
@@ -433,15 +463,15 @@ class AppController:
         # Update stats
         if stats and stats.start_time:
             stats.end_time = datetime.now()
-            stats.pomodoros_completed = (
-                self.pomodoro.state.pomodoros_completed
-            )
+            stats.pomodoros_completed = self.pomodoro.state.pomodoros_completed
 
         # Handle XP (apply penalty if ending early)
         xp_penalty = 0
         session_xp = self.xp_manager.state.session_xp
+        total_xp_after = self.xp_manager.state.total_xp
         if early and session_xp > 0:
             xp_penalty = self.xp_manager.deduct_xp_for_early_end()
+            total_xp_after = self.xp_manager.state.total_xp
             logger.info(f"Applied early end penalty: -{xp_penalty} XP")
 
         # Write session log
@@ -459,20 +489,20 @@ class AppController:
         # Generate witty AI personality-based message for session quit (prevent duplicates)
         if stats and stats.start_time and stats.end_time:
             should_generate_quit_message = True
-            
+
             # Check if we already generated a quit message for this session
-            if hasattr(self, '_last_quit_session_key'):
+            if hasattr(self, "_last_quit_session_key"):
                 current_session_key = f"{focus_minutes}_{distractions}_{early}"
                 if self._last_quit_session_key == current_session_key:
                     logger.info("Skip duplicate quit message generation")
                     should_generate_quit_message = False
-            
+
             if should_generate_quit_message:
                 # Try to use preloaded response first for instant delivery
                 goal_key = goal[:10]
                 preloaded_key = f"{early}_{distractions}_{goal_key}"
                 message = self._preloaded_responses.get(preloaded_key)
-                
+
                 if not message:
                     # Generate AI-powered witty remark about quitting session
                     context = {
@@ -480,31 +510,44 @@ class AppController:
                         "distractions_count": distractions,
                         "is_early_quit": early,
                         "goal": goal,
-                        "personality": self.state.personality_name
+                        "personality": self.state.personality_name,
+                        "session_xp": session_xp,
+                        "xp_penalty": xp_penalty,
+                        "total_xp": total_xp_after,
+                        "current_rank": self.xp_manager.state.current_rank,
                     }
-                    
+
                     # Get AI-generated witty quit message
-                    message = self.personality_manager.get_phrase("session_quit", context)
-                    
+                    message = self.personality_manager.get_phrase(
+                        "session_quit", context
+                    )
+
                     # Cache this response for potential reuse
                     self._preloaded_responses[preloaded_key] = message
                     logger.debug(f"Cached new quit response: {preloaded_key}")
-                
+
                 # Store session key to prevent duplicates
                 self._last_quit_session_key = f"{focus_minutes}_{distractions}_{early}"
-                
+
                 # Fallback if AI generation fails
                 if not message:
                     if early:
-                        message = f"Quitting after {focus_minutes} minutes with {distractions} distractions. The mission continues when you're ready!"
+                        net_xp = session_xp - xp_penalty
+                        message = (
+                            f"Quitting after {focus_minutes} minutes. "
+                            f"You earned {session_xp} XP but lost {xp_penalty} for the early exit. "
+                            f"Net: {net_xp} XP. The mission continues when you're ready!"
+                        )
                     else:
-                        message = f"Session complete! {focus_minutes} minutes focused. Mission accomplished!"
-                
+                        message = (
+                            f"Session complete! {focus_minutes} minutes of focused work. "
+                            f"You earned {session_xp} XP. Total: {total_xp_after} XP. "
+                            f"Rank: {self.xp_manager.state.current_rank}. Mission accomplished!"
+                        )
+
                 # Speak in background thread to avoid blocking session end
                 threading.Thread(
-                    target=self.tts_service.speak,
-                    args=(message,),
-                    daemon=True
+                    target=self.tts_service.speak, args=(message,), daemon=True
                 ).start()
 
         self.state.session_active = False
@@ -521,6 +564,9 @@ class AppController:
         # Reset stop event for next session
         self.stop_event.clear()
 
+        # Allow future auto_end_session events (for next session)
+        self._session_ending = False
+
         logger.info("Session ended")
 
         # Return session summary
@@ -532,6 +578,56 @@ class AppController:
             "total_xp": self.xp_manager.state.total_xp,
             "current_rank": self.xp_manager.state.current_rank,
         }
+
+    def shutdown(self) -> None:
+        """Stop background workers and audio before the bridge process exits."""
+        logger.info("Shutting down AppController")
+
+        self.stop_event.set()
+        self._session_ending = True
+
+        try:
+            self._stop_drill_worker()
+        except Exception as e:
+            logger.warning(f"Failed to stop drill worker during shutdown: {e}")
+
+        try:
+            self.tts_service.cancel_all()
+        except Exception as e:
+            logger.warning(f"Failed to cancel TTS during shutdown: {e}")
+
+        if self.wake_word_detector:
+            try:
+                self.wake_word_detector.stop()
+                self.state.wake_word_active = False
+            except Exception as e:
+                logger.warning(
+                    f"Failed to stop wake word detector during shutdown: {e}"
+                )
+
+        for name, stop_callable in [
+            ("pomodoro", self.pomodoro.stop),
+            ("motivation monitor", self.motivation_monitor.stop),
+            ("screen monitor", self.screen_monitor.stop),
+        ]:
+            try:
+                stop_callable()
+            except Exception as e:
+                logger.warning(f"Failed to stop {name} during shutdown: {e}")
+
+        current_thread = threading.current_thread()
+        for name, worker in self.workers.items():
+            if worker is current_thread:
+                continue
+            if worker.is_alive():
+                worker.join(timeout=2.0)
+                if worker.is_alive():
+                    logger.warning(f"Worker {name} did not stop during shutdown")
+
+        try:
+            self.tts_service.stop()
+        except Exception as e:
+            logger.warning(f"Failed to stop TTS worker during shutdown: {e}")
 
     def _start_drill_worker(self) -> None:
         """
@@ -810,6 +906,9 @@ class AppController:
             self._handle_wake_word(event)
         elif event_type == "note_taking_triggered":
             self._handle_note_taking(event)
+        elif event_type == "auto_end_session":
+            self._session_ending = True
+            self.end_session(early=False)
         elif event_type == "error_event":
             self._handle_error(event)
         else:
@@ -967,8 +1066,23 @@ class AppController:
 
         self.tts_service.speak(status)
 
-    def start_voice_interaction(self) -> None:
+    def _has_recent_wake_phrase_authorization(self) -> bool:
+        """Return True shortly after the full wake phrase was detected."""
+        last_wake_phrase_time = getattr(self, "_last_wake_phrase_time", None)
+        if last_wake_phrase_time is None:
+            return False
+
+        window_seconds = getattr(self, "_wake_phrase_authorization_seconds", 30.0)
+        return time.time() - last_wake_phrase_time <= window_seconds
+
+    def start_voice_interaction(self, triggered_by_wake_word: bool = False) -> bool:
         """Start voice interaction (push-to-talk or wake word triggered)."""
+        if not self.state.session_active and not triggered_by_wake_word:
+            logger.info(
+                "Ignoring voice interaction outside an active session without wake phrase"
+            )
+            return False
+
         # Stop wake word detector to avoid microphone conflicts
         wake_word_was_active = self.state.wake_word_active
         if self.wake_word_detector and wake_word_was_active:
@@ -1023,8 +1137,9 @@ class AppController:
         thread = threading.Thread(target=voice_thread, daemon=True)
         thread.start()
         logger.info("Voice interaction started")
+        return True
 
-    def start_note_taking(self) -> None:
+    def start_note_taking(self, triggered_by_wake_word: bool = False) -> bool:
         """
         Start note-taking mode.
 
@@ -1033,6 +1148,15 @@ class AppController:
         A double-beep warns at 15 seconds remaining.
         Note-taking suppresses off-task judgment for its duration.
         """
+        wake_authorized = (
+            triggered_by_wake_word or self._has_recent_wake_phrase_authorization()
+        )
+        if not self.state.session_active and not wake_authorized:
+            logger.info(
+                "Ignoring note-taking outside an active session without wake phrase"
+            )
+            return False
+
         notes_cfg = self.config.get("notes", {})
 
         # Lazy-load the Whisper base model (shared across calls)
@@ -1104,6 +1228,7 @@ class AppController:
         thread = threading.Thread(target=note_taking_thread, daemon=True)
         thread.start()
         logger.info("Note-taking mode started")
+        return True
 
     def _llm_cleanup_note(self, raw: str) -> Optional[str]:
         """
@@ -1179,7 +1304,11 @@ class AppController:
             judge_interval = self.config["judge_interval_sec"]
             last_judged_activity_id = None
             current_judgment = None
-            
+            last_judgment_time = 0.0  # Force judgment on first tick
+
+            # Re-judge periodically even if activity hasn't changed (60 s)
+            periodic_rejudge_interval = 60.0
+
             # XP tracking - award XP every minute of on_task time
             xp_accumulator = 0.0  # Track seconds of on_task time
 
@@ -1194,10 +1323,19 @@ class AppController:
                             else None
                         )
 
-                        # Only re-judge if activity changed
-                        if (
+                        time_since_judgment = time.time() - last_judgment_time
+                        activity_changed = (
                             last_judged_activity_id != current_activity_id
+                        )
+                        due_for_periodic = (
+                            time_since_judgment >= periodic_rejudge_interval
+                        )
+
+                        # Re-judge on activity change, first run, or periodic refresh
+                        if (
+                            activity_changed
                             or last_judged_activity_id is None
+                            or due_for_periodic
                         ):
                             current_judgment = self.judge.judge(
                                 goal=self.state.goal or "",
@@ -1215,6 +1353,7 @@ class AppController:
                             )
 
                             last_judged_activity_id = current_activity_id
+                            last_judgment_time = time.time()
 
                         # Update stats based on classification AND action
                         if current_judgment:
@@ -1233,7 +1372,7 @@ class AppController:
                                     self.state.stats.best_focus_streak_seconds = (
                                         self.state.stats.current_focus_streak_seconds
                                     )
-                                
+
                                 # Accumulate XP for on_task time
                                 xp_accumulator += judge_interval
                                 # Award XP every 60 seconds (1 minute)
@@ -1280,6 +1419,15 @@ class AppController:
             stop_event=self.stop_event,
         )
 
+        # EventProcessor — drains the event queue so activity/judgment state
+        # is always up-to-date even when no UI thread calls process_events_tick.
+        def event_processor_loop():
+            logger.info("EventProcessor started")
+            while not self.stop_event.is_set():
+                self.process_events_tick()
+                self.stop_event.wait(timeout=0.1)
+            logger.info("EventProcessor stopped")
+
         # Start worker threads
         self.workers["activity_poller"] = threading.Thread(
             target=activity_poller_loop, daemon=True
@@ -1289,6 +1437,9 @@ class AppController:
         )
         self.workers["reminder_worker"] = threading.Thread(
             target=reminder_worker.run, daemon=True
+        )
+        self.workers["event_processor"] = threading.Thread(
+            target=event_processor_loop, daemon=True
         )
 
         for name, worker in self.workers.items():
@@ -1326,7 +1477,7 @@ class AppController:
     def get_xp_state(self) -> Dict[str, Any]:
         """
         Get current XP state for API.
-        
+
         Returns:
             Dict with XP and rank information
         """
@@ -1335,7 +1486,7 @@ class AppController:
     def get_current_judgment(self) -> Optional[Dict[str, Any]]:
         """
         Get current judgment state for warning system.
-        
+
         Returns:
             Dict with judgment info, or None if no judgment
         """

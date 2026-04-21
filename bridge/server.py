@@ -8,7 +8,10 @@ Run with: python bridge/server.py
 """
 import logging
 import os
+import atexit
+import signal
 import sys
+import threading
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -43,6 +46,8 @@ controller: Optional[AppController] = None
 config: Dict[str, Any] = {}
 native_monitor: Optional[NativeMonitor] = None
 tts_service: Optional[TTSService] = None
+_shutdown_lock = threading.Lock()
+_shutdown_started = False
 
 
 def _apply_tts_runtime_config(tts: Optional[TTSService], cfg: Dict[str, Any]) -> None:
@@ -101,6 +106,86 @@ def initialize_services():
     logger.info("Services initialized successfully")
 
 
+def cleanup_services(reason: str = "shutdown") -> None:
+    """Stop background services before the bridge process exits."""
+    global _shutdown_started
+
+    with _shutdown_lock:
+        if _shutdown_started:
+            return
+        _shutdown_started = True
+
+    logger.info(f"Cleaning up Code Sergeant services ({reason})...")
+
+    if controller:
+        try:
+            controller.shutdown()
+        except Exception as e:
+            logger.warning(f"Controller cleanup failed: {e}")
+    elif tts_service:
+        try:
+            tts_service.cancel_all()
+            tts_service.stop()
+        except Exception as e:
+            logger.warning(f"TTS cleanup failed: {e}")
+
+    logger.info("Code Sergeant service cleanup complete")
+
+
+def shutdown_process(reason: str, exit_code: int = 0) -> None:
+    """Cleanup then terminate the bridge process."""
+    cleanup_services(reason)
+    os._exit(exit_code)
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def start_parent_watchdog() -> None:
+    """Exit the bridge if the Swift parent app goes away."""
+    raw_parent_pid = os.environ.get("CODESERGEANT_PARENT_PID")
+    if not raw_parent_pid:
+        return
+
+    try:
+        parent_pid = int(raw_parent_pid)
+    except ValueError:
+        logger.warning(f"Ignoring invalid CODESERGEANT_PARENT_PID={raw_parent_pid!r}")
+        return
+
+    if parent_pid <= 1:
+        return
+
+    def watch_parent() -> None:
+        logger.info(f"Parent watchdog active for PID {parent_pid}")
+        while True:
+            time.sleep(2.0)
+            if os.getppid() == 1 or not _pid_exists(parent_pid):
+                logger.warning("Parent app exited; shutting down bridge")
+                shutdown_process("parent app exited")
+
+    threading.Thread(target=watch_parent, name="parent-watchdog", daemon=True).start()
+
+
+def install_shutdown_handlers() -> None:
+    """Install process-level cleanup hooks."""
+    atexit.register(lambda: cleanup_services("atexit"))
+
+    def handle_signal(signum, _frame) -> None:
+        logger.info(f"Received signal {signum}; shutting down bridge")
+        shutdown_process(f"signal {signum}")
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
+
 @app.route("/api/shutdown", methods=["POST"])
 def shutdown_server():
     """Shutdown the bridge server."""
@@ -108,11 +193,9 @@ def shutdown_server():
     
     # Schedule shutdown after response is sent
     def shutdown():
-        import threading
-        import time
         time.sleep(0.5)  # Give time for response to be sent
         logger.info("Shutting down bridge server...")
-        os._exit(0)  # Force exit
+        shutdown_process("api shutdown")
     
     threading.Thread(target=shutdown, daemon=True).start()
     
@@ -812,20 +895,13 @@ def check_and_free_port(port: int) -> bool:
 
 def main():
     """Start the bridge server."""
-    # Initialize services
-    try:
-        initialize_services()
-    except Exception as e:
-        logger.error(f"Failed to initialize services: {e}")
-        logger.error(
-            "Make sure you're running from the project root and dependencies are installed"
-        )
-        sys.exit(1)
+    install_shutdown_handlers()
+    start_parent_watchdog()
 
     # Run server
     port = int(os.environ.get("BRIDGE_PORT", 5050))
 
-    # Check if port is available, try to free it if it's a Python process
+    # Check the port before starting microphones, TTS, or wake-word workers.
     if not check_and_free_port(port):
         logger.error(f"Port {port} is already in use!")
         logger.error(
@@ -834,6 +910,16 @@ def main():
         logger.error(f"To use a different port, set BRIDGE_PORT environment variable:")
         logger.error(f"  export BRIDGE_PORT=5051")
         logger.error(f"  python bridge/server.py")
+        sys.exit(1)
+
+    # Initialize services
+    try:
+        initialize_services()
+    except Exception as e:
+        logger.error(f"Failed to initialize services: {e}")
+        logger.error(
+            "Make sure you're running from the project root and dependencies are installed"
+        )
         sys.exit(1)
 
     logger.info("=" * 60)

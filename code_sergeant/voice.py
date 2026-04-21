@@ -1,4 +1,5 @@
 """Voice recording, transcription, wake word detection, and LLM interaction."""
+
 import json
 import logging
 import re
@@ -103,6 +104,7 @@ class WhisperBackend:
         beam_size: int = 5,
         vad_filter: bool = True,
         vad_parameters: Optional[Dict[str, Any]] = None,
+        no_speech_threshold: float = 0.6,
     ):
         if self.backend == "whisper":
             result = self.model.transcribe(
@@ -122,6 +124,7 @@ class WhisperBackend:
             beam_size=beam_size,
             vad_filter=vad_filter,
             vad_parameters=vad_parameters or {},
+            no_speech_threshold=no_speech_threshold,
         )
 
 
@@ -355,6 +358,105 @@ class WakeWordDetector:
 
         logger.info("Wake word detection stopped")
 
+    # ---------------------------------------------------------------------------
+    # Music vs. speech discrimination
+    # ---------------------------------------------------------------------------
+
+    # Minimum energy coefficient of variation to be considered speech-like.
+    # Speech is bursty (words + pauses); music is more sustained.
+    _SPEECH_ENERGY_CV_MIN = 0.25
+
+    # Maximum spectral flatness in the voice band (300-3 400 Hz).
+    # Values near 0 = very tonal (music instrument / clean note).
+    # Values near 1 = noise-like.  Speech sits roughly in 0.05-0.50.
+    _MUSIC_FLATNESS_MAX = 0.05
+
+    # Maximum no_speech_prob accepted per Whisper segment.
+    # faster-whisper exposes this; we discard segments the model itself
+    # is unsure about.
+    _MAX_NO_SPEECH_PROB = 0.60
+
+    def _is_speech_like(self, audio: np.ndarray) -> bool:
+        """
+        Quick pre-Whisper heuristic: return True if the chunk looks like
+        speech rather than music or ambient sound.
+
+        Two checks are combined — both must signal "music" to reject the
+        chunk, so the filter errs on the side of not missing real commands.
+        """
+        if len(audio) < self.sample_rate * 0.1:  # too short to analyse
+            return True
+
+        # ── 1. Energy burstiness ────────────────────────────────────────────
+        # Split into 50 ms frames and compare RMS variance to mean.
+        frame_len = max(1, int(self.sample_rate * 0.05))
+        frames = [
+            audio[i : i + frame_len]
+            for i in range(0, len(audio) - frame_len, frame_len)
+        ]
+        rms = np.array([np.sqrt(np.mean(f**2)) for f in frames])
+        mean_rms = rms.mean()
+        if mean_rms < 1e-8:
+            return False  # effectively silent
+        energy_cv = rms.std() / mean_rms  # coefficient of variation
+
+        # ── 2. Spectral flatness in voice band ─────────────────────────────
+        fft_mag = np.abs(np.fft.rfft(audio))
+        freqs = np.fft.rfftfreq(len(audio), 1.0 / self.sample_rate)
+        mask = (freqs >= 300) & (freqs <= 3400)
+        band = fft_mag[mask]
+        if len(band) == 0:
+            flatness = 0.5
+        else:
+            eps = 1e-10
+            geo = np.exp(np.mean(np.log(band + eps)))
+            arith = band.mean()
+            flatness = geo / (arith + eps)
+
+        # Reject only when BOTH checks agree it's music-like.
+        is_tonal = flatness < self._MUSIC_FLATNESS_MAX
+        is_sustained = energy_cv < self._SPEECH_ENERGY_CV_MIN
+        if is_tonal and is_sustained:
+            logger.debug(
+                f"Audio rejected as music-like: flatness={flatness:.3f}, energy_cv={energy_cv:.3f}"
+            )
+            return False
+
+        return True
+
+    def _transcribe_with_confidence_filter(self, audio: np.ndarray) -> str:
+        """
+        Transcribe a chunk and discard segments that Whisper itself rates as
+        low-confidence speech (no_speech_prob too high).
+
+        Returns the filtered transcript (may be empty string).
+        """
+        # Use a strict no_speech_threshold so the model itself rejects music/
+        # silence segments before we even see them.  The post-hoc per-segment
+        # check below catches anything the model-level threshold misses.
+        segments, _ = self.whisper_model.transcribe(
+            audio,
+            language="en",
+            beam_size=1,
+            vad_filter=True,
+            no_speech_threshold=0.5,  # stricter than the default 0.6
+        )
+
+        parts = []
+        for seg in segments:
+            # faster-whisper exposes no_speech_prob; vanilla whisper does not.
+            no_speech_prob = getattr(seg, "no_speech_prob", 0.0)
+            if no_speech_prob > self._MAX_NO_SPEECH_PROB:
+                logger.debug(
+                    f"Segment discarded (no_speech_prob={no_speech_prob:.2f}): '{seg.text.strip()}'"
+                )
+                continue
+            parts.append(seg.text)
+
+        return " ".join(parts).lower().strip()
+
+    # ---------------------------------------------------------------------------
+
     def _detection_loop(self):
         """Main detection loop."""
         chunk_samples = int(self.chunk_duration * self.sample_rate)
@@ -379,14 +481,11 @@ class WakeWordDetector:
                 if np.abs(audio_data).max() < 0.01:
                     continue
 
-                segments, _ = self.whisper_model.transcribe(
-                    audio_data,
-                    language="en",
-                    beam_size=1,
-                    vad_filter=True,
-                )
+                # Skip chunks that look like music rather than speech
+                if not self._is_speech_like(audio_data):
+                    continue
 
-                transcript = " ".join(seg.text for seg in segments).lower().strip()
+                transcript = self._transcribe_with_confidence_filter(audio_data)
                 if not transcript:
                     continue
 
@@ -422,10 +521,11 @@ class WakeWordDetector:
 
     def _matches_wake_word(self, transcript: str, wake_word: str) -> bool:
         """
-        Check if transcript contains wake word with fuzzy matching.
+        Check if transcript contains the full wake phrase.
 
-        Uses sensitivity parameter for fuzzy matching threshold.
-        Higher sensitivity = more strict matching, lower = more lenient.
+        The detector may use fuzzy matching for individual words, but every
+        word in the configured wake phrase must be present in order. This
+        prevents "sergeant" by itself from activating "hey sergeant".
 
         Args:
             transcript: Transcribed text
@@ -434,22 +534,28 @@ class WakeWordDetector:
         Returns:
             True if match found
         """
-        # Exact match
-        if wake_word in transcript:
+        normalized_transcript = self._normalize_phrase(transcript)
+        normalized_wake_word = self._normalize_phrase(wake_word)
+        if not normalized_transcript or not normalized_wake_word:
+            return False
+
+        transcript_words = normalized_transcript.split()
+        wake_words_parts = normalized_wake_word.split()
+
+        # Exact full-phrase match, ignoring punctuation/case.
+        if self._contains_word_sequence(transcript_words, wake_words_parts):
             return True
 
-        # Handle common transcription variations
+        # Handle common full-phrase transcription variations.
         variations = self._get_wake_word_variations(wake_word)
         for variation in variations:
-            if variation in transcript:
+            variation_words = self._normalize_phrase(variation).split()
+            if variation_words and self._contains_word_sequence(
+                transcript_words, variation_words
+            ):
                 return True
 
-        # Fuzzy matching using word-level similarity
-        # Split transcript into words and check for partial matches
-        transcript_words = transcript.lower().split()
-        wake_words_parts = wake_word.lower().split()
-
-        # Try to find wake word parts in sequence in the transcript
+        # Fuzzy matching using word-level similarity. Every word must match.
         if len(wake_words_parts) >= 2:
             for i in range(len(transcript_words) - len(wake_words_parts) + 1):
                 matches = 0
@@ -463,14 +569,30 @@ class WakeWordDetector:
                     ):
                         matches += 1
 
-                # If most parts match, consider it a match
-                if matches >= len(wake_words_parts) - 1:
+                if matches == len(wake_words_parts):
                     logger.debug(
                         f"Fuzzy match: '{transcript}' matched '{wake_word}' "
                         f"with {matches}/{len(wake_words_parts)} parts"
                     )
                     return True
 
+        return False
+
+    def _normalize_phrase(self, phrase: str) -> str:
+        """Normalize a transcribed phrase for wake-word matching."""
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", phrase.lower())).strip()
+
+    def _contains_word_sequence(
+        self, transcript_words: List[str], phrase_words: List[str]
+    ) -> bool:
+        """Return True when phrase_words appears contiguously in transcript_words."""
+        if not phrase_words or len(phrase_words) > len(transcript_words):
+            return False
+
+        phrase_len = len(phrase_words)
+        for i in range(len(transcript_words) - phrase_len + 1):
+            if transcript_words[i : i + phrase_len] == phrase_words:
+                return True
         return False
 
     def _word_similarity(self, word1: str, word2: str) -> float:
@@ -523,17 +645,7 @@ class WakeWordDetector:
             variations.extend(
                 [
                     f"hey {name}",
-                    f"hey, {name}",
-                    f"hey. {name}",
-                    f"a {name}",  # Whisper sometimes mishears "hey" as "a"
                     f"hay {name}",
-                    f"hi {name}",
-                    f"he {name}",  # Sometimes "hey" becomes "he"
-                    f"heh {name}",
-                    f"hey {name}.",  # With trailing punctuation
-                    f"hey, {name}.",
-                    # Handle common sergeant mishearings
-                    name,  # Just the name alone sometimes
                 ]
             )
 
@@ -544,11 +656,13 @@ class WakeWordDetector:
                     [
                         f"hey{base}sargent",
                         f"hey {base}sargent",
-                        f"hey {base}sargent.",
                         f"hey {base}sargeant",
-                        f"a {base}sargent",
                         f"hey {base}sergent",
                         f"hey {base}serjeant",
+                        f"hay {base}sargent",
+                        f"hay {base}sargeant",
+                        f"hay {base}sergent",
+                        f"hay {base}serjeant",
                     ]
                 )
 

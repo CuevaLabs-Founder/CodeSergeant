@@ -9,6 +9,18 @@ import SwiftUI
 import AppKit
 import AVFoundation
 import Foundation
+import Darwin
+
+private var bridgeProcessPIDForSignalHandler: Int32 = 0
+
+private func stopTrackedBridgeFromSignalHandler() {
+    let pid = bridgeProcessPIDForSignalHandler
+    guard pid > 0 else { return }
+
+    Darwin.kill(pid, SIGTERM)
+    usleep(300_000)
+    Darwin.kill(pid, SIGKILL)
+}
 
 @main
 struct CodeSergeantApp: App {
@@ -16,12 +28,9 @@ struct CodeSergeantApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
-        MenuBarExtra {
+        MenuBarExtra("Code Sergeant", image: "CodeSergeantMenuBarIcon") {
             MenuBarView()
                 .environmentObject(appState)
-        } label: {
-            Image(systemName: "shield.lefthalf.filled")
-                .symbolRenderingMode(.hierarchical)
         }
         .menuBarExtraStyle(.window)
     }
@@ -32,6 +41,9 @@ struct CodeSergeantApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var bridgeProcess: Process?
     private var bridgeProcessPID: Int32?
+    private var bridgeServerPath: String?
+    private let bridgeCleanupLock = NSLock()
+    private var isCleaningUpBridge = false
     private let bridgePort = 5050
     
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -40,8 +52,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Set up signal handlers for cleanup
         setupSignalHandlers()
-        
-        requestMicrophoneAccessIfNeeded()
+
+        requestDocumentsAccessIfNeeded()
+        requestMicrophoneAccessIfNeeded { [weak self] in
+            self?.startBridgeServer()
+        }
     }
     
     func applicationWillTerminate(_ notification: Notification) {
@@ -50,135 +65,180 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func startBridgeServer() {
-        // Bridge server is started as a separate process
-        // This allows the SwiftUI app to communicate with Python backend
-        DispatchQueue.global(qos: .background).async { [weak self] in
-            guard let self = self else { return }
-            let task = Process()
-            let fileManager = FileManager.default
-            
-            // Find project root by searching for bridge/server.py
-            // Start from current working directory or bundle path
-            var searchPath = URL(fileURLWithPath: fileManager.currentDirectoryPath)
-            
-            // If running from Xcode, start from bundle path and search up
-            let bundlePath = Bundle.main.bundlePath
-            if bundlePath.contains("DerivedData") {
-                // Running from Xcode - start from DerivedData and search up
-                searchPath = URL(fileURLWithPath: bundlePath)
-            }
-            
-            // Search up the directory tree for bridge/server.py
-            var projectRoot: URL?
-            var currentPath = searchPath
-            
-            while currentPath.path != "/" {
-                let bridgePath = currentPath.appendingPathComponent("bridge/server.py")
-                if fileManager.fileExists(atPath: bridgePath.path) {
-                    projectRoot = currentPath
-                    break
-                }
-                currentPath = currentPath.deletingLastPathComponent()
-            }
-            
-            // Fallback: try hardcoded project path
-            if projectRoot == nil {
-                let hardcodedPath = URL(fileURLWithPath: "/Users/cuevalabs/Desktop/Projects/CodeSergeant")
-                if fileManager.fileExists(atPath: hardcodedPath.appendingPathComponent("bridge/server.py").path) {
-                    projectRoot = hardcodedPath
-                }
-            }
-            
-            guard let root = projectRoot else {
-                print("❌ Could not find project root. Bridge server not started.")
-                print("   Please start manually: cd /Users/cuevalabs/Desktop/Projects/CodeSergeant && python bridge/server.py")
-                return
-            }
-            
-            let scriptPath = root.appendingPathComponent("start_bridge.sh")
-            let serverPath = root.appendingPathComponent("bridge/server.py")
-            let venvPython = root.appendingPathComponent(".venv/bin/python")
-            
-            // Try venv python first, then script, then system python
-            if fileManager.fileExists(atPath: venvPython.path) {
-                // Use venv python directly
-                task.executableURL = venvPython
-                task.arguments = [serverPath.path]
-                print("📦 Using venv Python: \(venvPython.path)")
-            } else if fileManager.fileExists(atPath: scriptPath.path) {
-                // Use startup script
-                task.executableURL = URL(fileURLWithPath: "/bin/bash")
-                task.arguments = [scriptPath.path]
-                print("📜 Using startup script")
-            } else {
-                // Fallback: system python
-                task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                task.arguments = ["python3", serverPath.path]
-                print("⚠️ Using system Python (venv not found)")
-            }
-            
-            task.currentDirectoryURL = root
-            
-            // Set environment variables
-            var environment = ProcessInfo.processInfo.environment
-            environment["PYTHONUNBUFFERED"] = "1"
-            // Add venv to PATH if it exists
-            if fileManager.fileExists(atPath: venvPython.path) {
-                let venvBin = root.appendingPathComponent(".venv/bin").path
-                if let currentPath = environment["PATH"] {
-                    environment["PATH"] = "\(venvBin):\(currentPath)"
-                } else {
-                    environment["PATH"] = venvBin
-                }
-            }
-            task.environment = environment
-            
-            do {
-                try task.run()
-                
-                // Store process reference for cleanup
-                self.bridgeProcess = task
-                self.bridgeProcessPID = task.processIdentifier
-                
-                print("✅ Bridge server starting at \(root.path)")
-                print("   Process ID: \(task.processIdentifier)")
-            } catch {
-                print("❌ Failed to start bridge server: \(error)")
-                print("   Project root: \(root.path)")
-                print("   Server path: \(serverPath.path)")
-                print("   Please start manually:")
-                print("   cd \(root.path)")
-                print("   source .venv/bin/activate")
-                print("   python bridge/server.py")
-            }
+        // Bridge startup is finite work; keep a strong delegate capture so launch
+        // cannot silently skip while SwiftUI finishes scene initialization.
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.launchBridgeServerProcess()
         }
     }
 
-    private func requestMicrophoneAccessIfNeeded() {
+    private func launchBridgeServerProcess() {
+        print("🚦 Bridge launch requested")
+
+        let task = Process()
+        let fileManager = FileManager.default
+
+        // Find project root by searching for bridge/server.py
+        // Start from current working directory or bundle path
+        var searchPath = URL(fileURLWithPath: fileManager.currentDirectoryPath)
+
+        // If running from Xcode, start from bundle path and search up
+        let bundlePath = Bundle.main.bundlePath
+        if bundlePath.contains("DerivedData") {
+            // Running from Xcode - start from DerivedData and search up
+            searchPath = URL(fileURLWithPath: bundlePath)
+        }
+
+        // Search up the directory tree for bridge/server.py
+        var projectRoot: URL?
+        var currentPath = searchPath
+
+        while currentPath.path != "/" {
+            let bridgePath = currentPath.appendingPathComponent("bridge/server.py")
+            if fileManager.fileExists(atPath: bridgePath.path) {
+                projectRoot = currentPath
+                break
+            }
+            currentPath = currentPath.deletingLastPathComponent()
+        }
+
+        // Fallback: try hardcoded project path
+        if projectRoot == nil {
+            let hardcodedPath = URL(fileURLWithPath: "/Users/cuevalabs/Desktop/Projects/CodeSergeant")
+            if fileManager.fileExists(atPath: hardcodedPath.appendingPathComponent("bridge/server.py").path) {
+                projectRoot = hardcodedPath
+            }
+        }
+
+        guard let root = projectRoot else {
+            print("❌ Could not find project root. Bridge server not started.")
+            print("   Please start manually: cd /Users/cuevalabs/Desktop/Projects/CodeSergeant && python bridge/server.py")
+            return
+        }
+
+        let scriptPath = root.appendingPathComponent("start_bridge.sh")
+        let serverPath = root.appendingPathComponent("bridge/server.py")
+        let venvPython = root.appendingPathComponent(".venv/bin/python")
+        bridgeServerPath = serverPath.path
+
+        // Xcode stop can leave an orphaned bridge. Clear exact matches before launch.
+        killStaleBridgeProcesses(matching: serverPath.path)
+
+        // Try venv python first, then script, then system python
+        if fileManager.fileExists(atPath: venvPython.path) {
+            // Use venv python directly
+            task.executableURL = venvPython
+            task.arguments = [serverPath.path]
+            print("📦 Using venv Python: \(venvPython.path)")
+        } else if fileManager.fileExists(atPath: scriptPath.path) {
+            // Use startup script
+            task.executableURL = URL(fileURLWithPath: "/bin/bash")
+            task.arguments = [scriptPath.path]
+            print("📜 Using startup script")
+        } else {
+            // Fallback: system python
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            task.arguments = ["python3", serverPath.path]
+            print("⚠️ Using system Python (venv not found)")
+        }
+
+        task.currentDirectoryURL = root
+
+        // Set environment variables
+        var environment = ProcessInfo.processInfo.environment
+        environment["PYTHONUNBUFFERED"] = "1"
+        environment["CODESERGEANT_PARENT_PID"] = "\(getpid())"
+        environment["CODESERGEANT_BRIDGE_PATH"] = serverPath.path
+        // Add venv to PATH if it exists
+        if fileManager.fileExists(atPath: venvPython.path) {
+            let venvBin = root.appendingPathComponent(".venv/bin").path
+            if let currentPath = environment["PATH"] {
+                environment["PATH"] = "\(venvBin):\(currentPath)"
+            } else {
+                environment["PATH"] = venvBin
+            }
+        }
+        task.environment = environment
+
+        do {
+            try task.run()
+
+            // Store process reference for cleanup
+            bridgeProcess = task
+            bridgeProcessPID = task.processIdentifier
+            bridgeProcessPIDForSignalHandler = task.processIdentifier
+
+            print("✅ Bridge server starting at \(root.path)")
+            print("   Process ID: \(task.processIdentifier)")
+        } catch {
+            print("❌ Failed to start bridge server: \(error)")
+            print("   Project root: \(root.path)")
+            print("   Server path: \(serverPath.path)")
+            print("   Please start manually:")
+            print("   cd \(root.path)")
+            print("   source .venv/bin/activate")
+            print("   python bridge/server.py")
+        }
+    }
+
+    private func requestDocumentsAccessIfNeeded() {
+        let fileManager = FileManager.default
+        let notesDirectory = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("CodeSergeant", isDirectory: true)
+            .appendingPathComponent("notes", isDirectory: true)
+        let markerFile = notesDirectory.appendingPathComponent(".codesergeant-permission-check")
+
+        do {
+            try fileManager.createDirectory(at: notesDirectory, withIntermediateDirectories: true)
+            try "ok".write(to: markerFile, atomically: true, encoding: .utf8)
+            try? fileManager.removeItem(at: markerFile)
+            print("📁 Documents access ready: \(notesDirectory.path)")
+        } catch {
+            print("⚠️ Documents access unavailable: \(error.localizedDescription)")
+        }
+    }
+
+    private func requestMicrophoneAccessIfNeeded(completion: @escaping () -> Void) {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             print("🎙️ Microphone access already granted")
-            startBridgeServer()
+            completion()
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
                 DispatchQueue.main.async {
                     if granted {
                         print("🎙️ Microphone access granted")
                     } else {
                         print("⚠️ Microphone access denied")
                     }
-                    self?.startBridgeServer()
+                    completion()
                 }
             }
         case .denied, .restricted:
             print("⚠️ Microphone access unavailable")
-            startBridgeServer()
+            completion()
         @unknown default:
-            startBridgeServer()
+            print("⚠️ Unknown microphone authorization state")
+            completion()
         }
     }
     
     private func stopBridgeServer() {
+        bridgeCleanupLock.lock()
+        if isCleaningUpBridge {
+            bridgeCleanupLock.unlock()
+            return
+        }
+        isCleaningUpBridge = true
+        bridgeCleanupLock.unlock()
+
+        defer {
+            bridgeCleanupLock.lock()
+            isCleaningUpBridge = false
+            bridgeCleanupLock.unlock()
+        }
+
         print("🛑 Stopping bridge server...")
         
         // Strategy 1: Try HTTP shutdown (with timeout)
@@ -236,24 +296,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Strategy 3: Kill by PID if we have it but process reference is lost
         if let pid = bridgeProcessPID {
-            let killTask = Process()
-            killTask.executableURL = URL(fileURLWithPath: "/bin/kill")
-            killTask.arguments = ["-9", "\(pid)"]
-            do {
-                try killTask.run()
-                killTask.waitUntilExit()
-                print("✅ Killed process by PID: \(pid)")
-            } catch {
-                // Process may already be dead, ignore error
-            }
+            terminatePID(pid, reason: "tracked bridge PID")
         }
         
         // Strategy 4: Fallback - kill any Python processes on the bridge port
         killPythonOnPort(bridgePort)
+
+        // Strategy 5: Sweep exact stale bridge command lines from this project.
+        if let bridgeServerPath {
+            killStaleBridgeProcesses(matching: bridgeServerPath)
+        }
         
         // Clear references
         bridgeProcess = nil
         bridgeProcessPID = nil
+        bridgeProcessPIDForSignalHandler = 0
         
         print("✅ Bridge server cleanup complete")
     }
@@ -261,22 +318,86 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupSignalHandlers() {
         // Handle SIGTERM (normal termination)
         signal(SIGTERM) { _ in
-            DispatchQueue.main.async {
-                if let delegate = NSApplication.shared.delegate as? AppDelegate {
-                    delegate.stopBridgeServer()
-                }
-                exit(0)
-            }
+            stopTrackedBridgeFromSignalHandler()
+            Darwin._exit(0)
         }
         
         // Handle SIGINT (Ctrl+C)
         signal(SIGINT) { _ in
-            DispatchQueue.main.async {
-                if let delegate = NSApplication.shared.delegate as? AppDelegate {
-                    delegate.stopBridgeServer()
+            stopTrackedBridgeFromSignalHandler()
+            Darwin._exit(0)
+        }
+
+        // Handle SIGQUIT (often used by debuggers/tools to stop a process)
+        signal(SIGQUIT) { _ in
+            stopTrackedBridgeFromSignalHandler()
+            Darwin._exit(0)
+        }
+    }
+
+    private func processExists(_ pid: Int32) -> Bool {
+        if Darwin.kill(pid, 0) == 0 {
+            return true
+        }
+        return errno == EPERM
+    }
+
+    private func waitForProcessExit(pid: Int32, timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while processExists(pid) && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
+    private func terminatePID(_ pid: Int32, reason: String) {
+        guard pid > 0, pid != getpid(), processExists(pid) else { return }
+
+        print("   Stopping \(reason) (PID: \(pid))...")
+        if Darwin.kill(pid, SIGTERM) == 0 {
+            waitForProcessExit(pid: pid, timeout: 1.5)
+        }
+
+        if processExists(pid) {
+            print("   Force killing \(reason) (PID: \(pid))...")
+            Darwin.kill(pid, SIGKILL)
+            waitForProcessExit(pid: pid, timeout: 0.5)
+        }
+    }
+
+    private func killStaleBridgeProcesses(matching serverPath: String) {
+        let psTask = Process()
+        psTask.executableURL = URL(fileURLWithPath: "/bin/ps")
+        psTask.arguments = ["-axo", "pid=,command="]
+
+        let pipe = Pipe()
+        psTask.standardOutput = pipe
+        psTask.standardError = Pipe()
+
+        do {
+            try psTask.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            psTask.waitUntilExit()
+            guard let output = String(data: data, encoding: .utf8) else { return }
+
+            for line in output.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard let firstSpace = trimmed.firstIndex(where: { $0 == " " || $0 == "\t" }) else {
+                    continue
                 }
-                exit(0)
+
+                let pidText = String(trimmed[..<firstSpace])
+                let command = String(trimmed[firstSpace...]).trimmingCharacters(in: .whitespaces)
+
+                guard command.contains(serverPath),
+                      let pid = Int32(pidText),
+                      pid != bridgeProcessPID else {
+                    continue
+                }
+
+                terminatePID(pid, reason: "stale Code Sergeant bridge")
             }
+        } catch {
+            print("   Could not scan for stale bridge processes: \(error.localizedDescription)")
         }
     }
     
@@ -378,6 +499,12 @@ class AppState: ObservableObject {
     @Published var rankProgress: Double = 0.0  // 0.0 to 1.0
     @Published var nextRankName: String = "Private"
     @Published var xpToNextRank: Int = 100
+    @Published var lastXPGain: Int = 0  // non-zero while XP toast is showing
+    @Published var draftGoal: String = ""  // persists across panel navigation
+    @Published var sessionEndedEarly: Bool = false
+
+    // Pomodoro state string from /api/timer
+    @Published var pomodoroState: String = "stopped"
     
     // Warning System (NEW)
     @Published var warningStatus: WarningStatus = .green
@@ -403,6 +530,8 @@ class AppState: ObservableObject {
     private var pollTick = 0
     private var previousMenuPanel: MenuPanel = .home
     private let bridgeURL = "http://127.0.0.1:5050"
+    private var previousSessionXP: Int = 0
+    private var xpGainResetTask: Task<Void, Never>?
     
     init() {
         startStatusPolling()
@@ -477,6 +606,7 @@ class AppState: ObservableObject {
 
                 self.isStartingSession = false
                 self.isSessionActive = true
+                self.sessionEndedEarly = false
                 self.sessionGoal = goal
                 self.sessionErrorMessage = nil
                 self.showSession()
@@ -511,28 +641,34 @@ class AppState: ObservableObject {
     
     func endSession(early: Bool) {
         guard let url = URL(string: "\(bridgeURL)/api/session/end") else { return }
-        
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["early": early])
-        
+
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard error == nil else { return }
-            
-            DispatchQueue.main.async {
-                self?.isSessionActive = false
-                self?.sessionGoal = ""
-                self?.focusTimeMinutes = 0
-                self?.remainingSeconds = 0
-                self?.isBreak = false
-                self?.isPaused = false
-                self?.sessionErrorMessage = nil
-                self?.showSession()
-                self?.fetchStatus()
-                self?.fetchTimerStatus()
-                self?.fetchXPStatus()
-                self?.fetchJudgmentStatus()
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.sessionEndedEarly = early
+                self.isSessionActive = false
+                self.sessionGoal = ""
+                self.draftGoal = ""
+                self.focusTimeMinutes = 0
+                self.remainingSeconds = 0
+                self.isBreak = false
+                self.isPaused = false
+                self.sessionErrorMessage = nil
+                self.previousSessionXP = 0
+                self.lastXPGain = 0
+                self.xpGainResetTask?.cancel()
+                self.showSession()
+                self.fetchStatus()
+                self.fetchTimerStatus()
+                self.fetchXPStatus()
+                self.fetchJudgmentStatus()
             }
         }.resume()
     }
@@ -711,33 +847,50 @@ class AppState: ObservableObject {
     
     private func fetchTimerStatus() {
         guard let url = URL(string: "\(bridgeURL)/api/timer") else { return }
-        
+
         URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-            
+
             DispatchQueue.main.async {
                 self?.remainingSeconds = json["remaining_seconds"] as? Int ?? 0
                 self?.isBreak = json["is_break"] as? Bool ?? false
-                self?.isPaused = json["is_paused"] as? Bool ?? false  // NEW: Track pause state
+                self?.isPaused = json["is_paused"] as? Bool ?? false
+                self?.pomodoroState = json["state"] as? String ?? "stopped"
             }
         }.resume()
     }
     
     private func fetchXPStatus() {
         guard let url = URL(string: "\(bridgeURL)/api/xp/status") else { return }
-        
+
         URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-            
-            DispatchQueue.main.async {
-                self?.totalXP = json["total_xp"] as? Int ?? 0
-                self?.sessionXP = json["session_xp"] as? Int ?? 0
-                self?.currentRank = json["current_rank"] as? String ?? "Recruit"
-                self?.rankProgress = json["rank_progress"] as? Double ?? 0.0
-                self?.nextRankName = json["next_rank_name"] as? String ?? ""
-                self?.xpToNextRank = json["xp_to_next_rank"] as? Int ?? 0
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let newSessionXP = json["session_xp"] as? Int ?? 0
+                let gain = newSessionXP - self.previousSessionXP
+
+                self.totalXP = json["total_xp"] as? Int ?? 0
+                self.sessionXP = newSessionXP
+                self.currentRank = json["current_rank"] as? String ?? "Recruit"
+                self.rankProgress = json["rank_progress"] as? Double ?? 0.0
+                self.nextRankName = json["next_rank_name"] as? String ?? ""
+                self.xpToNextRank = json["xp_to_next_rank"] as? Int ?? 0
+
+                // Show XP toast when on-task XP is earned during a session
+                if gain > 0 && self.isSessionActive {
+                    self.lastXPGain = gain
+                    self.xpGainResetTask?.cancel()
+                    self.xpGainResetTask = Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(3))
+                        self.lastXPGain = 0
+                    }
+                }
+                // Reset previous tracker — if session ended, sessionXP resets to 0 on next start
+                self.previousSessionXP = newSessionXP
             }
         }.resume()
     }

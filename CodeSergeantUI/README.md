@@ -18,19 +18,15 @@ A modern SwiftUI menu bar app with **liquid glass design** for macOS Sonoma/Sequ
 
 ## Building
 
-### Option 1: Xcode
+### Xcode
 
-1. Open `CodeSergeantUI` folder in Xcode
+1. Open `CodeSergeantUI.xcodeproj` in Xcode
 2. Select "My Mac" as the target
 3. Build and Run (⌘R)
 
-### Option 2: Swift Package Manager
-
-```bash
-cd CodeSergeantUI
-swift build
-swift run CodeSergeantUI
-```
+Do not run this UI with `swift run` or by opening the folder as a Swift Package.
+Code Sergeant is a menu bar app and must run as `CodeSergeantUI.app` so macOS
+loads the app bundle, Info.plist, asset catalog, and menu bar lifecycle.
 
 ## Architecture
 

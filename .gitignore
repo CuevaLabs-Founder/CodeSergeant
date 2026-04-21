@@ -73,3 +73,12 @@ secrets.json
 # Claude Code / tooling
 .agents/
 skills-lock.json
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# Landing page (private, deployed separately to Vercel)
+site/
+package-lock.json
